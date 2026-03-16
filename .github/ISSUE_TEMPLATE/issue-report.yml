@@ -5,7 +5,6 @@ labels:
   - bug
 assignees:
   - ms9513
-type: bug
 body:
   - type: markdown
     attributes:
