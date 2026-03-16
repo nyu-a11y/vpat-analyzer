@@ -35,7 +35,7 @@ body:
       label: Version of spreadsheet
       description: Which spreadsheet version are you using?
       options:
-        - "v0.1"
+        - "v1.0"
         - Other / Not sure
     validations:
       required: true
