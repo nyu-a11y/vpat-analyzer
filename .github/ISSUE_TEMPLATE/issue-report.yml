@@ -1,0 +1,73 @@
+name: Issue Report
+description: Let us know about an issue you're experiencing.
+title: "[BUG]: "
+labels:
+  - bug
+assignees:
+  - ms9513
+type: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report an issue with the VPAT Analyzer.
+
+        Please fill out the sections below with as much detail as you can so we can reproduce and fix the problem faster.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      description: Please confirm the following before creating your issue.
+      options:
+        - label: I searched existing issues and didn’t find a duplicate.
+          required: true
+  - type: textarea
+    id: describe-the-issue
+    attributes:
+      label: Describe the issue
+      description: Summarize the problem you're experiencing.
+      placeholder: A short description of what went wrong.
+    validations:
+      required: true
+  - type: dropdown
+    id: spreadsheet-version
+    attributes:
+      label: Version of spreadsheet
+      description: Which spreadsheet version are you using?
+      options:
+        - "v1.0"
+        - Other / Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: to-reproduce
+    attributes:
+      label: To Reproduce
+      description: List the exact steps needed to reproduce the issue.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. Scroll down to '...'
+        4. Click on '...'
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: Briefly explain what you expected to happen.
+      placeholder: Tell us what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If applicable, add screenshots to help demonstrate the problem.
+      placeholder: Add screenshots here (select or drag-and-drop) or paste additional details.
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other details that might help us investigate.
+      placeholder: Browser, environment, recent changes, workarounds, or anything else relevant.
