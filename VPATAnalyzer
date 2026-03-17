@@ -1,0 +1,2997 @@
+/*******************************************************
+ * VPAT ANALYZER - CONFIGURATION
+ *
+ * This script extracts VPAT data from Google Docs/DOCX files
+ * and populates a Google Sheet with conformance levels and remarks.
+ *******************************************************/
+
+/*******************************************************
+ * COLUMN CONFIGURATION
+ * Update these constants if your sheet column names change
+ *******************************************************/
+const CONFIG = {
+  // Output Sheet Name
+  OUTPUT_SHEET_NAME: "2) VPAT/ACR - Line-item Review",
+
+  // Sheet Column Names
+  COLUMN_NAMES: {
+    CRITERIA: "Criteria",
+    FOUND_IN_DOC: "Found in Doc", // optional — may not exist in new sheets
+    CONFORMANCE_LEVEL: "Conformance Level (author)",
+    REMARKS: "Remarks and Explanations (author)",
+    AI_COMMENT: "AI Comment",
+    // Interpreted columns
+    CONFORMANCE_INTERPRETED: "Standardized Conformance Level*",
+    APPLIES_TO_MEDIUMS: "Applies to (Mediums)*", // replaces the 5 separate medium columns
+    INTERNAL_COMMENT: "Internal Comment",
+    // Optional/Legacy
+    NEEDS_REVIEW: "Needs Review",
+  },
+
+  // Processing Settings
+  DEFAULT_START_ROW: 2, // First row after headers
+
+  // Prompts Sheet Configuration
+  PROMPTS_SHEET_NAME: "Advanced Settings Configuration",
+  PROMPT_NAME_COLUMN: 1, // Column A
+  PROMPT_TEXT_COLUMN: 2, // Column B
+  INTERPRET_PROMPT_NAME: "INTERPRET_CONFORMANCE",
+  CONFIDENCE_LEVEL_NAME: "CONFIDENCE_LEVEL",
+  DEFAULT_CONFIDENCE_THRESHOLD: 70, // Default if not set in Prompts sheet
+
+  // Start Sheet Configuration
+  START_SHEET_NAME: "1) Start",
+  SCORING_SHEET_NAME: "4) Scoring",
+  FILE_ID_CELL: "A5", // Cell containing the Google Drive file ID
+  AI_PROVIDER_CELL: "B5", // Cell containing AI Provider selection
+  API_KEY_CELL: "C5", // Cell containing the API key for selected provider
+
+  // AI Model Configuration
+  AI_MODEL: {
+    OPENAI_BASE_URL: "https://api.openai.com/v1",
+    OPENAI_MODEL: "gpt-4o-mini",
+    OPENAI_API_KEY_PROPERTY: "OPENAI_API_KEY",
+    GEMINI_BASE_URL: "https://generativelanguage.googleapis.com/v1beta",
+    GEMINI_MODEL: "gemini-2.5-flash",
+    GEMINI_API_KEY_PROPERTY: "GEMINI_API_KEY",
+  },
+
+  // Rate Limiting
+  API_DELAY_MS: 1000, // Delay between API calls
+  BATCH_SIZE: 5, // Number of rows to process in a single API call (0 = all at once)
+
+  // Valid conformance values
+  VALID_CONFORMANCE_VALUES: [
+    "Supports",
+    "Partially Supports",
+    "Does Not Support",
+    "Not Applicable",
+    "Not Evaluated",
+  ],
+
+  // Document Processing
+  EXPECTED_TABLE_COLUMNS: 3, // Criteria, Conformance Level, Remarks
+
+  // Quality Checklist Configuration
+  QUALITY_CHECKLIST: {
+    SHEET_NAME: "3) Quality Requirements",
+
+    // Column header names — used to dynamically resolve column positions at runtime.
+    // Column order in the sheet does NOT matter; headers are matched case-insensitively.
+    COLUMN_HEADERS: {
+      REQ_ID: "ReqID",
+      CATEGORY: "Category",
+      REQUIREMENT_TITLE: "Requirement Title",
+      REQUIREMENT_DESCRIPTION: "Requirement Description",
+      EVALUATION_GUIDANCE: "Evaluation Guidance",
+      IMPACT: "Impact",
+      TYPE: "Type",
+      AI_RESPONSE: "AI Response",
+      ORIGINAL_FROM_VPAT: "Original from VPAT",
+      AI_EXPLANATION: "AI Explanation",
+    },
+
+    // System prompt name in Prompts sheet
+    SYSTEM_PROMPT_NAME: "QUALITY_CHECKLIST_ANALYSIS",
+
+    // Processing settings
+    MAX_DOC_LENGTH: 100000, // Maximum document text length to send to AI
+    REQUIREMENTS_BATCH_SIZE: 5, // Number of requirements to process per API call (recommended: 5-10)
+  },
+};
+
+/*******************************************************
+ * MENU FUNCTIONS
+ *******************************************************/
+
+/**
+ * Creates custom menu when spreadsheet opens
+ */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("VPAT Analyzer")
+    .addItem("1) Run VPAT Analyzer", "runCompleteAnalysis")
+    .addSeparator()
+    .addItem("2.1) Extract from Doc (only)", "runExtraction")
+    .addItem("2.2) AI Interpretation", "runInterpretation")
+    .addSeparator()
+    .addItem("3.1) Run Quality Requirements", "runQualityAnalysis")
+    .addToUi();
+}
+
+/*******************************************************
+ * MAIN PROCESSING FUNCTION
+ *******************************************************/
+
+/**
+ * Runs both extraction and interpretation in sequence
+ */
+function runFullProcessing() {
+  processVPATDocument();
+  // Small delay between operations
+  Utilities.sleep(2000);
+  interpretConformanceLevels();
+}
+
+/**
+ * Runs all three processes: extraction, interpretation, and quality analysis
+ * This function can be assigned to a button in Google Sheets
+ */
+function runFullProcessingWithQuality() {
+  processVPATDocument();
+  Utilities.sleep(2000);
+  interpretConformanceLevels();
+  Utilities.sleep(2000);
+  analyzeQualityChecklist();
+}
+
+/**
+ * Button-friendly version: Runs complete VPAT processing pipeline
+ * Assign this function to a button for one-click processing
+ * Processes: 1) Extract data, 2) Interpret with AI, 3) Quality analysis
+ *
+ * TO ASSIGN TO A BUTTON:
+ * 1. Insert > Drawing (create a button/shape)
+ * 2. Click the three dots > Assign script
+ * 3. Enter: runCompleteAnalysis
+ */
+/**
+ * Unhides all four working sheets so they are visible before any operation runs.
+ * Safe to call even if a sheet is already visible.
+ */
+function unhideAllSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetNames = [
+    CONFIG.START_SHEET_NAME,
+    CONFIG.OUTPUT_SHEET_NAME,
+    CONFIG.QUALITY_CHECKLIST.SHEET_NAME,
+    CONFIG.SCORING_SHEET_NAME,
+  ];
+  for (const name of sheetNames) {
+    const sheet = ss.getSheetByName(name);
+    if (sheet && sheet.isSheetHidden()) {
+      sheet.showSheet();
+    }
+  }
+}
+
+function runCompleteAnalysis() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  unhideAllSheets();
+
+  try {
+    // Show starting message
+    ss.toast("Starting complete VPAT analysis...", "Processing", 5);
+
+    // Step 1: Extract from VPAT document
+    ss.toast(
+      "Step 1/3: Extracting data from VPAT document...",
+      "Processing",
+      -1,
+    );
+    processVPATDocument();
+    Utilities.sleep(2000);
+
+    // Step 2: AI interpretation
+    ss.toast("Step 2/3: Running AI interpretation...", "Processing", -1);
+    interpretConformanceLevels(true); // Skip prompt in automated mode
+    Utilities.sleep(2000);
+
+    // Step 3: Quality checklist analysis
+    ss.toast("Step 3/3: Analyzing quality requirements...", "Processing", -1);
+    analyzeQualityChecklist();
+
+    // Success message
+    ss.toast("✓ Complete analysis finished successfully!", "Success", 10);
+  } catch (error) {
+    Logger.log(`Error in runCompleteAnalysis: ${error.message}`);
+    Logger.log(error.stack);
+    ss.toast(`Error: ${error.message}`, "Analysis Failed", 10);
+  }
+}
+
+/**
+ * Button-friendly: Extract VPAT data only
+ * Assign to button with function name: runExtraction
+ */
+function runExtraction() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  unhideAllSheets();
+  try {
+    ss.toast("Extracting VPAT data...", "Processing", -1);
+    processVPATDocument();
+  } catch (error) {
+    ss.toast(`Error: ${error.message}`, "Extraction Failed", 10);
+  }
+}
+
+/**
+ * Button-friendly: Run AI interpretation only
+ * Assign to button with function name: runInterpretation
+ */
+function runInterpretation() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  unhideAllSheets();
+  try {
+    ss.toast("Running AI interpretation...", "Processing", -1);
+    interpretConformanceLevels(false); // Show prompt in manual mode
+  } catch (error) {
+    ss.toast(`Error: ${error.message}`, "Interpretation Failed", 10);
+  }
+}
+
+/**
+ * Button-friendly: Run quality analysis only
+ * Assign to button with function name: runQualityAnalysis
+ */
+function runQualityAnalysis() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  unhideAllSheets();
+  try {
+    ss.toast("Running quality analysis...", "Processing", -1);
+    analyzeQualityChecklist();
+  } catch (error) {
+    ss.toast(`Error: ${error.message}`, "Quality Analysis Failed", 10);
+  }
+}
+
+/**
+ * Main entry point for VPAT processing (extraction only)
+ * Orchestrates the entire workflow
+ */
+function processVPATDocument() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.OUTPUT_SHEET_NAME);
+
+  if (!sheet) {
+    throw new Error(
+      `Output sheet "${CONFIG.OUTPUT_SHEET_NAME}" not found. Please create it with the required columns.`,
+    );
+  }
+
+  try {
+    // Step 1: Get user input from Start sheet
+    const userConfig = getUserInput();
+    if (!userConfig) {
+      return; // Configuration not available
+    }
+
+    // Step 2: Validate sheet structure
+    const columnMap = validateAndMapColumns(sheet);
+
+    // Step 3: Determine row range (use all rows if not specified)
+    let startRow = userConfig.startRow;
+    let endRow = userConfig.endRow;
+
+    if (startRow === null || endRow === null) {
+      // Get all rows with data in the criteria column
+      const lastRow = sheet.getLastRow();
+      startRow = (columnMap._headerRow || CONFIG.DEFAULT_START_ROW - 1) + 1;
+      endRow = lastRow;
+      showProgress(
+        `Processing all criteria (rows ${startRow} to ${endRow})...`,
+      );
+    }
+
+    // Step 4: Get criteria from sheet
+    const criteriaMap = getCriteriaFromSheet(
+      sheet,
+      columnMap,
+      startRow,
+      endRow,
+    );
+
+    if (criteriaMap.size === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        `No criteria found in rows ${startRow} to ${endRow}.`,
+        "Error",
+        10,
+      );
+      return;
+    }
+
+    // Step 5: Show progress indicator
+    showProgress(`Processing ${criteriaMap.size} criteria...`);
+
+    // Step 6: Load document and extract tables
+    const documentData = loadDocument(userConfig.fileId);
+
+    // Step 7: Extract VPAT data from tables
+    showProgress(
+      `Extracting data from ${documentData.tables.length} tables...`,
+    );
+    const vpatData = extractVPATData(documentData.tables, criteriaMap);
+
+    // Step 9: Write data to sheet
+    showProgress(`Writing data to sheet...`);
+    const results = writeDataToSheet(sheet, vpatData, columnMap);
+
+    // Step 10: Cleanup and show results
+    showProgress(`Cleaning up temporary files...`);
+    cleanup(documentData.tempDocId);
+
+    // Use toast instead of blocking alert
+    const message = `✓ Complete! Updated ${results.rowsUpdated} of ${results.totalRows} rows`;
+    SpreadsheetApp.getActiveSpreadsheet().toast(message, "Success", 10);
+  } catch (error) {
+    Logger.log(`Error in processVPATDocument: ${error.message}`);
+    Logger.log(error.stack);
+
+    // Use toast for errors too
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `Error: ${error.message}`,
+      "Processing Failed",
+      10,
+    );
+  } finally {
+    // Always hide progress, never throw
+    try {
+      hideProgress();
+    } catch (e) {
+      // Ignore errors in cleanup
+    }
+  }
+}
+
+/*******************************************************
+ * USER INPUT FUNCTIONS
+ *******************************************************/
+
+/**
+ * Gets processing configuration from the Start sheet
+ * @returns {Object|null} Configuration object with fileId from A5
+ */
+function getUserInput() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const startSheet = ss.getSheetByName(CONFIG.START_SHEET_NAME);
+
+  if (!startSheet) {
+    throw new Error(
+      `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with the file ID in cell A5.`,
+    );
+  }
+
+  const fileId = startSheet.getRange(CONFIG.FILE_ID_CELL).getValue();
+
+  // Validate file ID
+  if (!fileId || String(fileId).trim() === "") {
+    throw new Error(
+      `File ID not found in cell ${CONFIG.FILE_ID_CELL} of "${CONFIG.START_SHEET_NAME}" sheet. Please enter the Google Drive file ID.`,
+    );
+  }
+
+  // Return file ID with null for row numbers (process all rows)
+  return { fileId: String(fileId).trim(), startRow: null, endRow: null };
+}
+
+/*******************************************************
+ * SHEET VALIDATION AND COLUMN MAPPING
+ *******************************************************/
+
+/**
+ * Validates sheet has required columns and creates column index map
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The active sheet
+ * @returns {Object} Map of column names to column indices
+ */
+function validateAndMapColumns(sheet) {
+  const allRows = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+
+  // Find the header row by scanning for the Criteria column
+  let headerRow = null;
+  let headerRowIndex = -1;
+  for (let r = 0; r < allRows.length; r++) {
+    if (allRows[r].includes(CONFIG.COLUMN_NAMES.CRITERIA)) {
+      headerRow = allRows[r];
+      headerRowIndex = r + 1; // 1-based sheet row
+      break;
+    }
+  }
+
+  if (!headerRow) {
+    throw new Error(
+      `Could not find header row containing "${CONFIG.COLUMN_NAMES.CRITERIA}" in any row of the sheet.`,
+    );
+  }
+
+  Logger.log(`Found header row at sheet row ${headerRowIndex}`);
+  const columnMap = {};
+  columnMap._headerRow = headerRowIndex; // Store for callers to use as data start reference
+
+  // Optional columns (won't throw error if missing)
+  const optionalColumns = [
+    "FOUND_IN_DOC", // removed from newer sheet designs
+    "AI_COMMENT",
+    "CONFORMANCE_INTERPRETED",
+    "APPLIES_TO_MEDIUMS",
+    "INTERNAL_COMMENT",
+    "NEEDS_REVIEW",
+  ];
+
+  // Find each column
+  for (const [key, columnName] of Object.entries(CONFIG.COLUMN_NAMES)) {
+    const colIndex = headerRow.indexOf(columnName);
+    if (colIndex === -1) {
+      if (optionalColumns.includes(key)) {
+        Logger.log(`Optional column "${columnName}" not found, skipping.`);
+        continue;
+      }
+      throw new Error(
+        `Required column "${columnName}" not found in sheet headers (checked row ${headerRowIndex}).`,
+      );
+    }
+    columnMap[key] = colIndex + 1; // Convert to 1-based index
+  }
+
+  return columnMap;
+}
+
+/*******************************************************
+ * CRITERIA EXTRACTION
+ *******************************************************/
+
+/**
+ * Extracts criteria from sheet and creates a lookup map
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The sheet
+ * @param {Object} columnMap - Column index mapping
+ * @param {number} startRow - Starting row number
+ * @param {number} endRow - Ending row number
+ * @returns {Map<string, number>} Map of normalized criteria to row numbers
+ */
+function getCriteriaFromSheet(sheet, columnMap, startRow, endRow) {
+  const criteriaCol = columnMap.CRITERIA;
+  const range = sheet.getRange(startRow, criteriaCol, endRow - startRow + 1, 1);
+  const values = range.getValues();
+
+  const criteriaMap = new Map();
+
+  Logger.log(`=== GET CRITERIA FROM SHEET DEBUG ===`);
+  Logger.log(`Criteria column: ${criteriaCol}`);
+  Logger.log(`Row range: ${startRow} to ${endRow}`);
+
+  values.forEach((row, index) => {
+    const criteriaText = row[0];
+    const normalizedKey = normalizeCriteriaKey(criteriaText);
+
+    Logger.log(
+      `Sheet row ${
+        startRow + index
+      }: "${criteriaText}" -> normalized key: "${normalizedKey}"`,
+    );
+
+    if (normalizedKey) {
+      const rowNumber = startRow + index;
+      criteriaMap.set(normalizedKey, rowNumber);
+      Logger.log(`Added to map: "${normalizedKey}" -> row ${rowNumber}`);
+    }
+  });
+
+  Logger.log(`=== CRITERIA MAP COMPLETE: ${criteriaMap.size} entries ===`);
+  return criteriaMap;
+}
+
+/**
+ * Normalizes criteria text to extract key (e.g., "1.1.1" from "1.1.1 Non-text Content")
+ * @param {string} text - The criteria text
+ * @returns {string|null} Normalized key or null
+ */
+function normalizeCriteriaKey(text) {
+  if (!text) return null;
+
+  const cleaned = String(text).replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+
+  // Extract numeric pattern like "1.1.1" or "4.1"
+  const match = cleaned.match(/^[^\d]*([0-9]+\.[0-9]+(?:\.[0-9]+)*)/);
+
+  return match ? match[1] : null;
+}
+
+/*******************************************************
+ * DOCUMENT LOADING
+ *******************************************************/
+
+/**
+ * Loads document from Drive and extracts tables
+ * Handles Google Docs, DOCX, and PDF files (auto-converts as needed)
+ * @param {string} fileId - Google Drive file ID
+ * @returns {Object} Object containing tables array and optional tempDocId
+ */
+function loadDocument(fileId) {
+  let tempDocId = null;
+
+  try {
+    const file = DriveApp.getFileById(fileId);
+    const mimeType = file.getMimeType();
+
+    let docId = fileId;
+
+    // Handle DOCX conversion
+    if (
+      mimeType ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) {
+      Logger.log(`Converting DOCX to Google Doc: ${file.getName()}`);
+      docId = convertDocxToGoogleDoc(file);
+      tempDocId = docId;
+    }
+    // Handle PDF conversion (with OCR)
+    else if (mimeType === "application/pdf") {
+      Logger.log(`Converting PDF to Google Doc (with OCR): ${file.getName()}`);
+      docId = convertPdfToGoogleDoc(file);
+      tempDocId = docId;
+    } else if (mimeType !== "application/vnd.google-apps.document") {
+      throw new Error(
+        `Unsupported file type: ${mimeType}. Please use Google Doc, DOCX, or PDF format.`,
+      );
+    }
+
+    // Open document and extract tables
+    const doc = DocumentApp.openById(docId);
+    const tables = doc.getBody().getTables();
+
+    if (!tables || tables.length === 0) {
+      throw new Error(
+        "No tables found in document. Please check document structure.",
+      );
+    }
+
+    return { tables, tempDocId };
+  } catch (error) {
+    // Cleanup temp doc if error occurs
+    if (tempDocId) {
+      cleanupTempDoc(tempDocId);
+    }
+    throw new Error(`Failed to load document: ${error.message}`);
+  }
+}
+
+/**
+ * Converts DOCX file to Google Doc format
+ * @param {GoogleAppsScript.Drive.File} file - The DOCX file
+ * @returns {string} ID of converted Google Doc
+ */
+function convertDocxToGoogleDoc(file) {
+  showProgress("Converting DOCX to Google Doc...");
+  const blob = file.getBlob();
+
+  const converted = Drive.Files.create(
+    {
+      name: `[Temp VPAT] ${file.getName()} ${new Date().toISOString()}`,
+      mimeType: "application/vnd.google-apps.document",
+    },
+    blob,
+  );
+
+  // Wait a moment for conversion to complete
+  Utilities.sleep(2000);
+  Logger.log(`DOCX converted to Google Doc with ID: ${converted.id}`);
+  return converted.id;
+}
+
+/**
+ * Converts PDF file to Google Doc format with OCR
+ * @param {GoogleAppsScript.Drive.File} file - The PDF file
+ * @returns {string} ID of converted Google Doc
+ */
+function convertPdfToGoogleDoc(file) {
+  showProgress("Converting PDF to Google Doc (this may take a moment)...");
+  const blob = file.getBlob();
+
+  // Convert PDF to Google Doc with OCR enabled
+  const converted = Drive.Files.create(
+    {
+      name: `[Temp VPAT] ${file.getName()} ${new Date().toISOString()}`,
+      mimeType: "application/vnd.google-apps.document",
+    },
+    blob,
+    {
+      ocrLanguage: "en", // OCR is automatically applied when converting PDF to Doc
+    },
+  );
+
+  // Wait longer for PDF conversion (OCR takes time)
+  showProgress("Waiting for PDF conversion to complete...");
+  Utilities.sleep(5000);
+  Logger.log(`PDF converted to Google Doc with ID: ${converted.id}`);
+  return converted.id;
+}
+
+/*******************************************************
+ * VPAT DATA EXTRACTION
+ *******************************************************/
+
+/**
+ * Extracts VPAT data from document tables
+ * @param {GoogleAppsScript.Document.Table[]} tables - Array of tables from document
+ * @param {Map<string, number>} criteriaMap - Map of criteria to row numbers
+ * @returns {Object} Map of row numbers to VPAT data
+ */
+function extractVPATData(tables, criteriaMap) {
+  const vpatData = {};
+  let rowsProcessed = 0;
+
+  Logger.log(`=== EXTRACT VPAT DATA DEBUG ===`);
+  Logger.log(`Number of tables: ${tables.length}`);
+  Logger.log(`Criteria map size: ${criteriaMap.size}`);
+  Logger.log(
+    `Criteria keys in map: ${Array.from(criteriaMap.keys()).join(", ")}`,
+  );
+
+  for (const table of tables) {
+    const numRows = table.getNumRows();
+    Logger.log(`Processing table with ${numRows} rows`);
+
+    // Skip header row (start from index 1)
+    for (let i = 1; i < numRows; i++) {
+      try {
+        const row = table.getRow(i);
+
+        // Ensure row has expected number of columns
+        if (row.getNumCells() < CONFIG.EXPECTED_TABLE_COLUMNS) {
+          Logger.log(
+            `Row ${i} has ${row.getNumCells()} cells, expected ${
+              CONFIG.EXPECTED_TABLE_COLUMNS
+            }, skipping`,
+          );
+          continue;
+        }
+
+        // Extract cell data
+        const criteriaText = getCellText(row.getCell(0));
+        const conformanceText = getCellText(row.getCell(1));
+        const remarksText = getCellText(row.getCell(2));
+
+        // Normalize criteria and find matching row
+        const criteriaKey = normalizeCriteriaKey(criteriaText);
+
+        Logger.log(
+          `Table row ${i}: criteria="${criteriaText}" -> key="${criteriaKey}"`,
+        );
+
+        if (criteriaKey && criteriaMap.has(criteriaKey)) {
+          const targetRow = criteriaMap.get(criteriaKey);
+
+          vpatData[targetRow] = {
+            conformanceLevel: conformanceText,
+            remarks: remarksText,
+            originalCriteria: criteriaText,
+          };
+
+          Logger.log(
+            `✓ Matched! Writing to sheet row ${targetRow}: conformance="${conformanceText}"`,
+          );
+          rowsProcessed++;
+        } else {
+          Logger.log(`✗ No match in criteria map for key "${criteriaKey}"`);
+        }
+      } catch (error) {
+        Logger.log(`Error processing table row ${i}: ${error.message}`);
+        // Continue processing other rows
+      }
+    }
+  }
+
+  Logger.log(`=== EXTRACTION COMPLETE: ${rowsProcessed} criteria matched ===`);
+  return vpatData;
+}
+
+/**
+ * Safely extracts text from a table cell
+ * @param {GoogleAppsScript.Document.TableCell} cell - The table cell
+ * @returns {string} Cell text content
+ */
+function getCellText(cell) {
+  try {
+    return cell.getText().trim();
+  } catch (error) {
+    Logger.log(`Error reading cell text: ${error.message}`);
+    return "";
+  }
+}
+
+/*******************************************************
+ * SHEET WRITING
+ *******************************************************/
+
+/**
+ * Writes extracted VPAT data to sheet
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The target sheet
+ * @param {Object} vpatData - Map of row numbers to VPAT data
+ * @param {Object} columnMap - Column index mapping
+ * @returns {Object} Processing results statistics
+ */
+function writeDataToSheet(sheet, vpatData, columnMap) {
+  let rowsUpdated = 0;
+
+  const sortedRows = Object.keys(vpatData)
+    .map((r) => parseInt(r, 10))
+    .sort((a, b) => a - b);
+
+  Logger.log(`=== WRITE DATA TO SHEET DEBUG ===`);
+  Logger.log(`Total rows to write: ${sortedRows.length}`);
+  Logger.log(`vpatData keys: ${Object.keys(vpatData).join(", ")}`);
+  Logger.log(`Column map CONFORMANCE_LEVEL: ${columnMap.CONFORMANCE_LEVEL}`);
+  Logger.log(`Column map REMARKS: ${columnMap.REMARKS}`);
+
+  for (const rowNum of sortedRows) {
+    try {
+      const data = vpatData[rowNum];
+      Logger.log(
+        `Writing row ${rowNum}: Conformance="${
+          data.conformanceLevel
+        }", Remarks="${data.remarks.substring(0, 50)}..."`,
+      );
+
+      // Write "Found in Doc" marker only if the column exists in this sheet
+      if (columnMap.FOUND_IN_DOC) {
+        sheet.getRange(rowNum, columnMap.FOUND_IN_DOC).setValue(true);
+      }
+
+      // Write conformance level
+      sheet
+        .getRange(rowNum, columnMap.CONFORMANCE_LEVEL)
+        .setValue(data.conformanceLevel);
+
+      // Write remarks
+      sheet.getRange(rowNum, columnMap.REMARKS).setValue(data.remarks);
+
+      rowsUpdated++;
+      Logger.log(`Successfully wrote row ${rowNum}`);
+    } catch (error) {
+      Logger.log(`Error writing data to row ${rowNum}: ${error.message}`);
+      Logger.log(`Error stack: ${error.stack}`);
+    }
+  }
+
+  Logger.log(`=== WRITE COMPLETE: ${rowsUpdated} rows updated ===`);
+
+  return {
+    totalRows: sortedRows.length,
+    rowsUpdated: rowsUpdated,
+    rowsFailed: sortedRows.length - rowsUpdated,
+  };
+}
+
+/*******************************************************
+ * UTILITY FUNCTIONS
+ *******************************************************/
+
+/**
+ * Shows progress toast notification
+ * @param {string} message - Progress message
+ */
+function showProgress(message) {
+  SpreadsheetApp.getActiveSpreadsheet().toast(message, "VPAT Analyzer", -1);
+}
+
+/**
+ * Hides progress toast notification
+ */
+function hideProgress() {
+  SpreadsheetApp.getActiveSpreadsheet().toast("", "VPAT Analyzer", 1);
+}
+
+/**
+ * Cleans up temporary document if it exists
+ * @param {string|null} tempDocId - Temporary document ID
+ */
+function cleanup(tempDocId) {
+  if (tempDocId) {
+    cleanupTempDoc(tempDocId);
+  }
+}
+
+/**
+ * Deletes temporary document from Drive
+ * @param {string} docId - Document ID to delete
+ */
+function cleanupTempDoc(docId) {
+  try {
+    // Use DriveApp instead of Drive API for more reliable deletion
+    const file = DriveApp.getFileById(docId);
+    file.setTrashed(true);
+    Logger.log(`Cleaned up temporary document: ${docId}`);
+  } catch (error) {
+    // Don't throw - just log the error
+    Logger.log(`Failed to cleanup temp doc ${docId}: ${error.message}`);
+  }
+}
+
+/**
+ * Shows completion message to user
+ * @param {GoogleAppsScript.Base.Ui} ui - UI object
+ * @param {Object} results - Processing results
+ */
+function showCompletionMessage(ui, results) {
+  const message =
+    `Processing Complete!\n\n` +
+    `Rows Updated: ${results.rowsUpdated}\n` +
+    `Total Processed: ${results.totalRows}`;
+
+  if (results.rowsFailed > 0) {
+    ui.alert(
+      "Processing Complete (with warnings)",
+      `${message}\n\nWarning: ${results.rowsFailed} rows had errors. Check logs for details.`,
+      ui.ButtonSet.OK,
+    );
+  } else {
+    ui.alert("Success", message, ui.ButtonSet.OK);
+  }
+}
+
+/*******************************************************
+ * AI INTERPRETATION FUNCTIONALITY
+ *******************************************************/
+
+/**
+ * Main function to interpret conformance levels using AI
+ * Processes only rows that were populated in the last extraction run
+ * @param {boolean} skipPrompt - If true, automatically processes all rows without prompting
+ */
+function interpretConformanceLevels(skipPrompt) {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.OUTPUT_SHEET_NAME);
+
+  if (!sheet) {
+    throw new Error(
+      `Output sheet "${CONFIG.OUTPUT_SHEET_NAME}" not found. Please create it with the required columns.`,
+    );
+  }
+
+  try {
+    // Step 1: Validate columns exist
+    const columnMap = validateAndMapColumnsForInterpretation(sheet);
+
+    // Step 2: Get the prompt and confidence threshold from Prompts sheet
+    const systemPrompt = getPromptFromSheet(ss);
+    const confidenceThreshold = getConfidenceThreshold(ss);
+
+    // Step 3: Get row range (skip prompt if automated)
+    let userConfig;
+    if (skipPrompt) {
+      // Automated mode: process all rows
+      userConfig = { startRow: null, endRow: null };
+    } else {
+      // Manual mode: ask user
+      userConfig = getRowRangeForInterpretation(ui);
+      if (!userConfig) {
+        return; // User cancelled
+      }
+    }
+
+    // Determine row range
+    let startRow = userConfig.startRow;
+    let endRow = userConfig.endRow;
+
+    if (startRow === null || endRow === null) {
+      const lastRow = sheet.getLastRow();
+      startRow = (columnMap._headerRow || CONFIG.DEFAULT_START_ROW - 1) + 1;
+      endRow = lastRow;
+    }
+
+    // Step 4: Find rows with original conformance data (from extraction)
+    showProgress(`Analyzing ${endRow - startRow + 1} rows...`);
+    const rowsToProcess = findRowsWithConformanceData(
+      sheet,
+      columnMap,
+      startRow,
+      endRow,
+    );
+
+    if (rowsToProcess.length === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        "No rows with conformance data found. Run extraction first.",
+        "No Data",
+        5,
+      );
+      return;
+    }
+
+    // Step 5: Process each row with AI
+    showProgress(`Interpreting ${rowsToProcess.length} rows with AI...`);
+    const results = processRowsWithAI(
+      sheet,
+      columnMap,
+      rowsToProcess,
+      systemPrompt,
+      confidenceThreshold,
+    );
+
+    // Step 6: Show completion
+    const message = `✓ Interpreted ${results.success} of ${rowsToProcess.length} rows`;
+    SpreadsheetApp.getActiveSpreadsheet().toast(message, "Success", 10);
+  } catch (error) {
+    Logger.log(`Error in interpretConformanceLevels: ${error.message}`);
+    Logger.log(error.stack);
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `Error: ${error.message}`,
+      "Interpretation Failed",
+      10,
+    );
+  } finally {
+    hideProgress();
+  }
+}
+
+/**
+ * Gets row range from user for interpretation
+ */
+function getRowRangeForInterpretation(ui) {
+  const response = ui.prompt(
+    "AI Interpretation Configuration",
+    "Enter row range to interpret (optional):\n\n" +
+      "Start Row, End Row\n\n" +
+      "Examples:\n" +
+      "  2, 50  (interpret rows 2-50)\n" +
+      "  (leave empty to interpret all rows)",
+    ui.ButtonSet.OK_CANCEL,
+  );
+
+  if (response.getSelectedButton() !== ui.Button.OK) {
+    return null;
+  }
+
+  const input = response.getResponseText().trim();
+
+  // If empty, process all rows
+  if (!input) {
+    return { startRow: null, endRow: null };
+  }
+
+  const inputs = input.split(",").map((s) => s.trim());
+  const startRow = parseInt(inputs[0], 10);
+  const endRow = parseInt(inputs[1], 10);
+
+  if (
+    isNaN(startRow) ||
+    isNaN(endRow) ||
+    startRow < CONFIG.DEFAULT_START_ROW ||
+    endRow < startRow
+  ) {
+    throw new Error("Invalid row numbers.");
+  }
+
+  return { startRow, endRow };
+}
+
+/**
+ * Validates that interpreted columns exist in the sheet
+ */
+function validateAndMapColumnsForInterpretation(sheet) {
+  const allRows = sheet
+    .getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn())
+    .getValues();
+
+  // Find the header row by scanning for the Criteria column
+  let headerRow = null;
+  let headerRowIndex = -1;
+  for (let r = 0; r < allRows.length; r++) {
+    if (allRows[r].includes(CONFIG.COLUMN_NAMES.CRITERIA)) {
+      headerRow = allRows[r];
+      headerRowIndex = r + 1; // 1-based sheet row
+      break;
+    }
+  }
+
+  if (!headerRow) {
+    throw new Error(
+      `Could not find header row containing "${CONFIG.COLUMN_NAMES.CRITERIA}" in any row of the sheet.`,
+    );
+  }
+
+  Logger.log(`Found header row at sheet row ${headerRowIndex}`);
+  const columnMap = {};
+  columnMap._headerRow = headerRowIndex; // Store for callers to use as data start reference
+
+  // --- Required input columns (read during interpretation) ---
+  const requiredColumns = {
+    CRITERIA: CONFIG.COLUMN_NAMES.CRITERIA,
+    CONFORMANCE_LEVEL: CONFIG.COLUMN_NAMES.CONFORMANCE_LEVEL,
+    REMARKS: CONFIG.COLUMN_NAMES.REMARKS,
+  };
+
+  // --- Required output columns (written during interpretation) ---
+  const requiredOutputColumns = {
+    AI_COMMENT: CONFIG.COLUMN_NAMES.AI_COMMENT,
+    CONFORMANCE_INTERPRETED: CONFIG.COLUMN_NAMES.CONFORMANCE_INTERPRETED,
+    APPLIES_TO_MEDIUMS: CONFIG.COLUMN_NAMES.APPLIES_TO_MEDIUMS,
+  };
+
+  // --- Optional columns (mapped if present, silently skipped if absent) ---
+  const optionalColumnDefs = {
+    FOUND_IN_DOC: CONFIG.COLUMN_NAMES.FOUND_IN_DOC,
+    NEEDS_REVIEW: CONFIG.COLUMN_NAMES.NEEDS_REVIEW,
+    INTERNAL_COMMENT: CONFIG.COLUMN_NAMES.INTERNAL_COMMENT,
+  };
+
+  // Map required input columns — throw if any are missing
+  for (const [key, columnName] of Object.entries(requiredColumns)) {
+    const colIndex = headerRow.indexOf(columnName);
+    if (colIndex === -1) {
+      throw new Error(
+        `Required column "${columnName}" not found in sheet headers (checked row ${headerRowIndex}).`,
+      );
+    }
+    columnMap[key] = colIndex + 1;
+  }
+
+  // Map required output columns — throw if any are missing
+  for (const [key, columnName] of Object.entries(requiredOutputColumns)) {
+    const colIndex = headerRow.indexOf(columnName);
+    if (colIndex === -1) {
+      throw new Error(
+        `Required output column "${columnName}" not found in sheet headers (checked row ${headerRowIndex}). Please add this column to the sheet.`,
+      );
+    }
+    columnMap[key] = colIndex + 1;
+  }
+
+  // Map optional columns — warn and skip if absent
+  for (const [key, columnName] of Object.entries(optionalColumnDefs)) {
+    const colIndex = headerRow.indexOf(columnName);
+    if (colIndex !== -1) {
+      columnMap[key] = colIndex + 1;
+      Logger.log(
+        `Optional column "${columnName}" found at column ${colIndex + 1}.`,
+      );
+    } else {
+      Logger.log(`Optional column "${columnName}" not found — skipping.`);
+    }
+  }
+
+  return columnMap;
+}
+
+/**
+ * Gets the interpretation prompt from the Prompts sheet
+ */
+function getPromptFromSheet(spreadsheet) {
+  try {
+    const promptsSheet = spreadsheet.getSheetByName(CONFIG.PROMPTS_SHEET_NAME);
+
+    if (!promptsSheet) {
+      throw new Error(
+        `"${CONFIG.PROMPTS_SHEET_NAME}" sheet not found. Please create it with columns: "Prompt Name" and "Prompt Text"`,
+      );
+    }
+
+    const data = promptsSheet.getDataRange().getValues();
+
+    // Find the prompt by name (skip header row)
+    for (let i = 1; i < data.length; i++) {
+      const promptName = data[i][CONFIG.PROMPT_NAME_COLUMN - 1];
+      const promptText = data[i][CONFIG.PROMPT_TEXT_COLUMN - 1];
+
+      if (promptName === CONFIG.INTERPRET_PROMPT_NAME) {
+        if (!promptText) {
+          throw new Error(`Prompt "${CONFIG.INTERPRET_PROMPT_NAME}" is empty.`);
+        }
+        return promptText;
+      }
+    }
+
+    throw new Error(
+      `Prompt "${CONFIG.INTERPRET_PROMPT_NAME}" not found in "${CONFIG.PROMPTS_SHEET_NAME}" sheet.`,
+    );
+  } catch (error) {
+    throw new Error(`Failed to load prompt: ${error.message}`);
+  }
+}
+
+/**
+ * Gets the API key from the Start sheet (cell C5)
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet
+ * @returns {string} API key from cell C5
+ */
+function getAPIKeyFromSheet(spreadsheet) {
+  try {
+    const startSheet = spreadsheet.getSheetByName(CONFIG.START_SHEET_NAME);
+
+    if (!startSheet) {
+      throw new Error(
+        `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with API key in cell C5.`,
+      );
+    }
+
+    const apiKey = startSheet.getRange(CONFIG.API_KEY_CELL).getValue();
+
+    if (!apiKey || String(apiKey).trim() === "") {
+      throw new Error(
+        `API key not found in cell ${CONFIG.API_KEY_CELL} of "${CONFIG.START_SHEET_NAME}" sheet. Please enter your API key.`,
+      );
+    }
+
+    return String(apiKey).trim();
+  } catch (error) {
+    throw new Error(`Failed to read API key from sheet: ${error.message}`);
+  }
+}
+
+/**
+ * Gets the AI provider from the Start sheet (cell B5)
+ * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet
+ * @returns {string} Provider name ("OPENAI" or "GEMINI")
+ */
+function getAIProvider(spreadsheet) {
+  try {
+    const startSheet = spreadsheet.getSheetByName(CONFIG.START_SHEET_NAME);
+
+    if (!startSheet) {
+      Logger.log(
+        `"${CONFIG.START_SHEET_NAME}" sheet not found, defaulting to OpenAI`,
+      );
+      return "OPENAI";
+    }
+
+    const providerValue = startSheet
+      .getRange(CONFIG.AI_PROVIDER_CELL)
+      .getValue();
+
+    const provider = String(providerValue).trim().toUpperCase();
+
+    // Check for various forms of provider names
+    if (provider === "OPENAI" || provider === "OPEN AI") {
+      Logger.log("Using OpenAI provider");
+      return "OPENAI";
+    } else if (provider === "GEMINI") {
+      Logger.log("Using Gemini provider");
+      return "GEMINI";
+    } else {
+      Logger.log(
+        `Unknown provider value "${providerValue}", defaulting to OpenAI`,
+      );
+      return "OPENAI";
+    }
+  } catch (error) {
+    Logger.log(
+      `Error reading AI provider: ${error.message}, defaulting to OpenAI`,
+    );
+    return "OPENAI";
+  }
+}
+
+/**
+ * Gets the confidence threshold from the Prompts sheet
+ */
+function getConfidenceThreshold(spreadsheet) {
+  try {
+    const promptsSheet = spreadsheet.getSheetByName(CONFIG.PROMPTS_SHEET_NAME);
+
+    if (!promptsSheet) {
+      return CONFIG.DEFAULT_CONFIDENCE_THRESHOLD;
+    }
+
+    const data = promptsSheet.getDataRange().getValues();
+
+    // Find the confidence level setting (skip header row)
+    for (let i = 1; i < data.length; i++) {
+      const promptName = data[i][CONFIG.PROMPT_NAME_COLUMN - 1];
+      const promptText = data[i][CONFIG.PROMPT_TEXT_COLUMN - 1];
+
+      if (promptName === CONFIG.CONFIDENCE_LEVEL_NAME) {
+        const threshold = parseInt(promptText, 10);
+        if (!isNaN(threshold) && threshold >= 0 && threshold <= 100) {
+          Logger.log(`Using confidence threshold: ${threshold}`);
+          return threshold;
+        }
+      }
+    }
+
+    Logger.log(
+      `Confidence threshold not found, using default: ${CONFIG.DEFAULT_CONFIDENCE_THRESHOLD}`,
+    );
+    return CONFIG.DEFAULT_CONFIDENCE_THRESHOLD;
+  } catch (error) {
+    Logger.log(`Error reading confidence threshold: ${error.message}`);
+    return CONFIG.DEFAULT_CONFIDENCE_THRESHOLD;
+  }
+}
+
+/**
+ * Normalizes conformance value to handle AI response variations
+ * @param {string} value - Raw value from AI
+ * @returns {string} Normalized valid conformance value or original if already valid
+ */
+function normalizeConformanceValue(value) {
+  if (!value) return "";
+
+  const normalized = String(value).trim();
+
+  // Check if already valid (exact match with proper capitalization)
+  if (CONFIG.VALID_CONFORMANCE_VALUES.includes(normalized)) {
+    return normalized;
+  }
+
+  // Normalize common variations (case-insensitive matching)
+  const lowerValue = normalized.toLowerCase();
+
+  // Map variations to correct values
+  const mappings = {
+    // Supports variations
+    supports: "Supports",
+    support: "Supports",
+    yes: "Supports",
+    supported: "Supports",
+
+    // Partially Supports variations
+    "partially supports": "Partially Supports",
+    "partial supports": "Partially Supports",
+    "partially support": "Partially Supports",
+    "partial support": "Partially Supports",
+    partially: "Partially Supports",
+    partial: "Partially Supports",
+    "supports with exceptions": "Partially Supports",
+    "supports with exception": "Partially Supports",
+    sometimes: "Partially Supports",
+
+    // Does Not Support variations
+    "does not support": "Does Not Support",
+    "doesn't support": "Does Not Support",
+    "does not supports": "Does Not Support",
+    "not supported": "Does Not Support",
+    "not support": "Does Not Support",
+    no: "Does Not Support",
+    fails: "Does Not Support",
+    failed: "Does Not Support",
+
+    // Not Applicable variations
+    "not applicable": "Not Applicable",
+    "n/a": "Not Applicable",
+    na: "Not Applicable",
+    "not apply": "Not Applicable",
+
+    // Not Evaluated variations
+    "not evaluated": "Not Evaluated",
+    "not assessed": "Not Evaluated",
+    unevaluated: "Not Evaluated",
+    unknown: "Not Evaluated",
+  };
+
+  if (mappings[lowerValue]) {
+    return mappings[lowerValue];
+  }
+
+  // If no mapping found, return original value (will be logged as invalid)
+  return normalized;
+}
+
+/**
+ * Finds rows that have conformance data (from extraction)
+ */
+function findRowsWithConformanceData(sheet, columnMap, startRow, endRow) {
+  const numRows = endRow - startRow + 1;
+
+  // Check both "Found in Doc" and "Conformance Level (author)" columns
+  // FOUND_IN_DOC is optional — fall back to conformance-only check if absent
+  const foundInDocCol = columnMap.FOUND_IN_DOC || null;
+  const conformanceCol = columnMap.CONFORMANCE_LEVEL;
+
+  // Read conformance column; conditionally read Found in Doc
+  const conformanceData = sheet
+    .getRange(startRow, conformanceCol, numRows, 1)
+    .getValues();
+  const foundInDocData = foundInDocCol
+    ? sheet.getRange(startRow, foundInDocCol, numRows, 1).getValues()
+    : null;
+
+  const rowsToProcess = [];
+
+  for (let i = 0; i < numRows; i++) {
+    const foundInDoc = foundInDocData ? foundInDocData[i][0] : null;
+    const conformance = conformanceData[i][0];
+
+    const hasFoundInDoc = foundInDoc === true || foundInDoc === "TRUE";
+    const hasConformance = conformance && String(conformance).trim() !== "";
+
+    if (hasFoundInDoc || hasConformance) {
+      rowsToProcess.push(startRow + i);
+    }
+  }
+
+  Logger.log(
+    `Found ${rowsToProcess.length} rows to interpret (from ${startRow} to ${endRow})`,
+  );
+  if (rowsToProcess.length > 0 && rowsToProcess.length <= 20) {
+    Logger.log(`Rows to process: ${rowsToProcess.join(", ")}`);
+  }
+
+  return rowsToProcess;
+}
+
+/**
+ * Processes rows with AI to interpret conformance levels
+ */
+function processRowsWithAI(
+  sheet,
+  columnMap,
+  rowNumbers,
+  systemPrompt,
+  confidenceThreshold,
+) {
+  let successCount = 0;
+  let errorCount = 0;
+
+  // Determine batch size; CONFIG.BATCH_SIZE must be a positive integer, otherwise process all at once
+  const batchSize =
+    CONFIG.BATCH_SIZE > 0 ? CONFIG.BATCH_SIZE : rowNumbers.length;
+
+  const totalBatches = Math.ceil(rowNumbers.length / batchSize);
+
+  // Process in batches
+  for (let i = 0; i < rowNumbers.length; i += batchSize) {
+    const batchRows = rowNumbers.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    let batchSucceeded = false;
+
+    // Collect all data for this batch (outside the retry loop — data doesn't change)
+    const batchData = [];
+    for (const rowNum of batchRows) {
+      const conformanceLevel = sheet
+        .getRange(rowNum, columnMap.CONFORMANCE_LEVEL)
+        .getValue();
+      const remarks = sheet.getRange(rowNum, columnMap.REMARKS).getValue();
+      const criteria = sheet.getRange(rowNum, columnMap.CRITERIA).getValue();
+
+      batchData.push({
+        rowNum: rowNum,
+        criteria: String(criteria || "").trim(),
+        conformanceLevel: String(conformanceLevel || "").trim(),
+        remarks: String(remarks || "").trim(),
+      });
+    }
+
+    const userMessage = buildBatchMessage(batchData);
+
+    // Attempt the API call with one automatic retry on failure
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        showProgress(
+          `Processing batch ${batchNum} of ${totalBatches} (${batchData.length} rows)` +
+            (attempt > 1 ? ` — retry ${attempt - 1}...` : "..."),
+        );
+
+        const batchInterpretations = callAIForInterpretation(
+          systemPrompt,
+          userMessage,
+        );
+
+        // Build a lookup map from entryIndex → interpretation for robust matching.
+        // Falls back to positional index if the AI does not return entryIndex fields.
+        const interpretationByIndex = {};
+        if (Array.isArray(batchInterpretations)) {
+          batchInterpretations.forEach((item, pos) => {
+            const idx =
+              item && typeof item.entryIndex === "number"
+                ? item.entryIndex
+                : pos;
+            interpretationByIndex[idx] = item;
+          });
+        }
+
+        // Write results for each row in the batch
+        for (let j = 0; j < batchData.length; j++) {
+          const rowNum = batchData[j].rowNum;
+
+          // Safety guard: never overwrite the header row or any row before it
+          if (columnMap._headerRow && rowNum <= columnMap._headerRow) {
+            Logger.log(
+              `SAFETY: Skipping row ${rowNum} — at or before header row ${columnMap._headerRow}.`,
+            );
+            errorCount++;
+            continue;
+          }
+
+          const interpretation = interpretationByIndex[j] || {};
+
+          try {
+            writeInterpretedValues(
+              sheet,
+              columnMap,
+              rowNum,
+              interpretation,
+              confidenceThreshold,
+            );
+            successCount++;
+          } catch (writeError) {
+            Logger.log(`Error writing row ${rowNum}: ${writeError.message}`);
+            errorCount++;
+          }
+        }
+
+        batchSucceeded = true;
+        break; // Exit retry loop on success
+      } catch (apiError) {
+        Logger.log(
+          `Batch ${batchNum} attempt ${attempt} failed: ${apiError.message}`,
+        );
+        if (attempt < 2) {
+          // Wait 5 seconds before retrying
+          Logger.log(`Waiting 5s before retry...`);
+          Utilities.sleep(5000);
+        }
+      }
+    }
+
+    if (!batchSucceeded) {
+      // Both attempts failed — notify the user and count the errors
+      const failedRows = batchRows.join(", ");
+      Logger.log(
+        `Batch ${batchNum} permanently failed. Affected rows: ${failedRows}`,
+      );
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        `Batch ${batchNum}/${totalBatches} failed after retry. Rows skipped: ${failedRows}. Check Logs (Extensions > Apps Script > Executions) for details.`,
+        "Batch Error",
+        15,
+      );
+      errorCount += batchRows.length;
+    }
+
+    // Rate limiting between batches — outside try/catch so a sleep failure
+    // never contaminates the error count for the batch just completed.
+    if (i + batchSize < rowNumbers.length) {
+      Utilities.sleep(CONFIG.API_DELAY_MS);
+    }
+  }
+
+  return { success: successCount, errors: errorCount };
+}
+
+/**
+ * Builds a batch message with multiple rows for AI interpretation
+ */
+function buildBatchMessage(batchData) {
+  let message =
+    "Analyze the following VPAT entries and return a JSON array with interpretations:\n\n";
+
+  batchData.forEach((item, index) => {
+    message += `Entry ${index}:\n`;
+    if (item.criteria) {
+      message += `Criteria: ${item.criteria}\n`;
+    }
+    message += `Conformance Level: ${item.conformanceLevel}\n`;
+    message += `Remarks: ${item.remarks}\n\n`;
+  });
+
+  message += `Return a JSON array — one object per entry, IN THE SAME ORDER — with this structure:
+{
+  "entryIndex": <integer matching the Entry number above>,
+  "conformanceLevel": "Supports|Partially Supports|Does Not Support|Not Applicable|Not Evaluated",
+  "appliesToMediums": "Comma-separated list of mediums EXPLICITLY mentioned by the author in the Remarks. Choose ONLY from: Web, Electronic Docs, Software, Closed, Authoring Tool. Use empty string if none are explicitly named.",
+  "comment": "Brief explanation only when confidence is low; otherwise empty string",
+  "confidence": <integer 0-100>
+}
+
+IMPORTANT:
+- Include exactly one object per entry, keeping the original order.
+- The "entryIndex" must match the Entry number exactly.
+- Do NOT add extra keys or commentary outside the JSON array.`;
+
+  return message;
+}
+
+/**
+ * Writes interpreted values to the sheet
+ */
+function writeInterpretedValues(
+  sheet,
+  columnMap,
+  rowNum,
+  interpretation,
+  confidenceThreshold,
+) {
+  // --- Standardized Conformance Level ---
+  const rawConformance = interpretation.conformanceLevel || "";
+  Logger.log(
+    `Row ${rowNum}, conformanceLevel: Raw AI value = "${rawConformance}"`,
+  );
+  const normalizedConformance = normalizeConformanceValue(rawConformance);
+
+  if (
+    normalizedConformance &&
+    !CONFIG.VALID_CONFORMANCE_VALUES.includes(normalizedConformance)
+  ) {
+    Logger.log(
+      `Row ${rowNum}: INVALID conformance "${rawConformance}" (normalized: "${normalizedConformance}"). Defaulting to "Not Evaluated".`,
+    );
+    sheet
+      .getRange(rowNum, columnMap.CONFORMANCE_INTERPRETED)
+      .setValue("Not Evaluated");
+  } else {
+    if (normalizedConformance !== rawConformance) {
+      Logger.log(
+        `Row ${rowNum}: Normalized "${rawConformance}" -> "${normalizedConformance}"`,
+      );
+    }
+    sheet
+      .getRange(rowNum, columnMap.CONFORMANCE_INTERPRETED)
+      .setValue(normalizedConformance || "Not Evaluated");
+  }
+
+  // --- Applies to (Mediums)* ---
+  // AI returns a comma-separated string of mediums explicitly mentioned by the author.
+  // Valid values: Web, Electronic Docs, Software, Closed, Authoring Tool
+  const validMediums = [
+    "Web",
+    "Electronic Docs",
+    "Software",
+    "Closed",
+    "Authoring Tool",
+  ];
+  const rawMediums = String(interpretation.appliesToMediums || "").trim();
+
+  // Validate each medium token and keep only recognised ones
+  const filteredMediums = rawMediums
+    ? rawMediums
+        .split(",")
+        .map((m) => m.trim())
+        .filter((m) =>
+          validMediums.some((v) => v.toLowerCase() === m.toLowerCase()),
+        )
+        // Normalise casing to the canonical form
+        .map((m) =>
+          validMediums.find((v) => v.toLowerCase() === m.toLowerCase()),
+        )
+    : [];
+
+  if (columnMap.APPLIES_TO_MEDIUMS) {
+    sheet
+      .getRange(rowNum, columnMap.APPLIES_TO_MEDIUMS)
+      .setValue(filteredMediums.join(", "));
+    Logger.log(
+      `Row ${rowNum}, appliesToMediums: "${rawMediums}" -> stored: "${filteredMediums.join(", ")}"`,
+    );
+  }
+
+  // --- Confidence / AI Comment ---
+  const confidence = parseInt(interpretation.confidence, 10) || 0;
+  const needsReview = confidence < confidenceThreshold;
+
+  Logger.log(
+    `Row ${rowNum}: Confidence=${confidence}, Threshold=${confidenceThreshold}, NeedsReview=${needsReview}`,
+  );
+
+  // Write AI Comment ONLY when confidence is below threshold
+  const comment = needsReview
+    ? interpretation.comment || "Low confidence - please review"
+    : "";
+  sheet.getRange(rowNum, columnMap.AI_COMMENT).setValue(comment);
+
+  // Write to Needs Review column only if it exists
+  if (columnMap.NEEDS_REVIEW) {
+    sheet.getRange(rowNum, columnMap.NEEDS_REVIEW).setValue(needsReview);
+  }
+}
+
+/*******************************************************
+ * AI API INTEGRATION
+ *******************************************************/
+
+/**
+ * Dispatches to the correct AI provider for interpretation
+ */
+function callAIForInterpretation(systemPrompt, userMessage) {
+  // Get provider from sheet dynamically
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const provider = getAIProvider(ss);
+
+  if (provider === "OPENAI") {
+    return callOpenAIForInterpretation(systemPrompt, userMessage);
+  } else if (provider === "GEMINI") {
+    return callGeminiForInterpretation(systemPrompt, userMessage);
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
+}
+
+/**
+ * Calls OpenAI API directly
+ */
+function callOpenAIForInterpretation(systemPrompt, userMessage) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const apiKey = getAPIKeyFromSheet(ss);
+
+  const url = `${CONFIG.AI_MODEL.OPENAI_BASE_URL}/chat/completions`;
+
+  const payload = {
+    model: CONFIG.AI_MODEL.OPENAI_MODEL,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
+    temperature: 0.2, // Match Gemini's low temperature for consistent/deterministic output
+    max_tokens: 8192, // Match Gemini's token limit to avoid truncation on large batches
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  };
+
+  Logger.log(`Calling OpenAI API: ${url}`);
+  Logger.log(`Model: ${CONFIG.AI_MODEL.OPENAI_MODEL}`);
+  Logger.log(`Payload size: ${JSON.stringify(payload).length} bytes`);
+
+  const response = UrlFetchApp.fetch(url, options);
+  const statusCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  Logger.log(`Response Status: ${statusCode}`);
+
+  // Handle 429 rate limit with retry (matching Gemini behaviour)
+  if (statusCode === 429) {
+    let retryDelayMs = 60000; // Default 60s for OpenAI
+    try {
+      // OpenAI includes a Retry-After header (seconds)
+      const retryAfter =
+        response.getHeaders()["Retry-After"] ||
+        response.getHeaders()["retry-after"];
+      if (retryAfter) {
+        const seconds = parseInt(retryAfter, 10);
+        if (!isNaN(seconds)) retryDelayMs = (seconds + 2) * 1000; // Add 2s buffer
+      }
+    } catch (e) {
+      /* ignore, use default */
+    }
+
+    Logger.log(
+      `[OpenAI] 429 rate limit hit. Retrying after ${retryDelayMs / 1000}s...`,
+    );
+    showProgress(
+      `Rate limit hit. Waiting ${Math.round(retryDelayMs / 1000)}s before retry...`,
+    );
+    Utilities.sleep(retryDelayMs);
+
+    // Retry once
+    const retryResponse = UrlFetchApp.fetch(url, options);
+    const retryStatus = retryResponse.getResponseCode();
+    const retryText = retryResponse.getContentText();
+    Logger.log(`[OpenAI] Retry response status: ${retryStatus}`);
+
+    if (retryStatus !== 200) {
+      let errorDetails = retryText;
+      try {
+        errorDetails = JSON.stringify(JSON.parse(retryText), null, 2);
+      } catch (e) {
+        /* not JSON */
+      }
+      throw new Error(
+        `OpenAI API returned ${retryStatus} after retry. Details: ${errorDetails}`,
+      );
+    }
+
+    return parseOpenAIResponseText(retryText);
+  }
+
+  if (statusCode !== 200) {
+    let errorDetails = responseText;
+    try {
+      const errorData = JSON.parse(responseText);
+      errorDetails = JSON.stringify(errorData, null, 2);
+    } catch (e) {
+      // Response is not JSON
+    }
+    throw new Error(
+      `OpenAI API returned ${statusCode}. Details: ${errorDetails}`,
+    );
+  }
+
+  return parseOpenAIResponseText(responseText);
+}
+
+/**
+ * Parses the raw text from an OpenAI API response into a JSON array.
+ * Mirrors the robustness of parseGeminiResponseText with the same fallback chain.
+ * @param {string} responseText - Raw response body from OpenAI
+ * @returns {Array} Parsed array of AI response objects
+ */
+function parseOpenAIResponseText(responseText) {
+  const data = JSON.parse(responseText);
+
+  if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+    throw new Error(`Invalid OpenAI response structure: ${responseText}`);
+  }
+
+  const content = data.choices[0].message.content;
+  Logger.log(`OpenAI Response length: ${content.length} characters`);
+  Logger.log(`OpenAI Response (first 500 chars): ${content.substring(0, 500)}`);
+  Logger.log(
+    `OpenAI Response (last 500 chars): ${content.substring(Math.max(0, content.length - 500))}`,
+  );
+
+  // Strip markdown code fences if present
+  let cleanContent = content.trim();
+  if (cleanContent.startsWith("```")) {
+    cleanContent = cleanContent.replace(/^```(?:json)?\s*\n?/, "");
+    cleanContent = cleanContent.replace(/\n?```\s*$/, "");
+  }
+
+  // Parse JSON response (handle both single object and array)
+  try {
+    const parsed = JSON.parse(cleanContent);
+    const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+    Logger.log(
+      `Successfully parsed ${resultArray.length} items from OpenAI response`,
+    );
+    return resultArray;
+  } catch (e) {
+    Logger.log(`JSON parse error: ${e.message}`);
+    Logger.log(`Attempting to extract valid JSON from response...`);
+
+    // Try to extract a JSON array from the response
+    const jsonMatch = cleanContent.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+        Logger.log(`Extracted ${resultArray.length} items from partial JSON`);
+        return resultArray;
+      } catch (e2) {
+        Logger.log(`Failed to parse extracted JSON: ${e2.message}`);
+
+        // Try to fix incomplete JSON array by truncating to last complete object
+        let fixedJson = jsonMatch[0].trim();
+        Logger.log(
+          `Attempting to fix truncated JSON (length: ${fixedJson.length})...`,
+        );
+
+        const lastBrace = fixedJson.lastIndexOf("}");
+        if (lastBrace !== -1) {
+          fixedJson = fixedJson.substring(0, lastBrace + 1) + "]";
+          try {
+            const parsed = JSON.parse(fixedJson);
+            const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+            Logger.log(
+              `Fixed truncated JSON, extracted ${resultArray.length} items (response was cut off)`,
+            );
+            return resultArray;
+          } catch (e3) {
+            Logger.log(`Failed to fix at last brace: ${e3.message}`);
+
+            // Last resort: find the last complete object by scanning backwards
+            const lastCompleteMatch = fixedJson.match(
+              /([\s\S]*\})\s*[,\]]?\s*[^\]]*$/,
+            );
+            if (lastCompleteMatch) {
+              const attempt = lastCompleteMatch[1].trim();
+              const finalAttempt = attempt.startsWith("[")
+                ? attempt + "]"
+                : "[" + attempt + "]";
+              try {
+                const parsed = JSON.parse(finalAttempt);
+                const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+                Logger.log(
+                  `Last-resort fix extracted ${resultArray.length} items`,
+                );
+                return resultArray;
+              } catch (e4) {
+                Logger.log(`Last-resort fix also failed: ${e4.message}`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Final fallback: try extracting a single object
+    const objMatch = cleanContent.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      try {
+        const parsed = JSON.parse(objMatch[0]);
+        Logger.log(`Extracted single object from OpenAI response`);
+        return [parsed];
+      } catch (e5) {
+        Logger.log(`Single object extraction also failed: ${e5.message}`);
+      }
+    }
+
+    Logger.log(`Full response for debugging: ${cleanContent}`);
+    throw new Error(
+      `Failed to parse OpenAI response as JSON. Response length: ${content.length} chars. Parse error: ${e.message}`,
+    );
+  }
+}
+
+/**
+ * Calls Gemini API for interpretation
+ */
+function callGeminiForInterpretation(systemPrompt, userMessage) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const apiKey = getAPIKeyFromSheet(ss);
+
+  const url = `${CONFIG.AI_MODEL.GEMINI_BASE_URL}/models/${CONFIG.AI_MODEL.GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+  // Gemini uses a different format: contents array with parts
+  const payload = {
+    contents: [
+      {
+        parts: [
+          {
+            text: `${systemPrompt}\n\n${userMessage}`,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 8192, // Increased to handle larger batches
+    },
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  };
+
+  Logger.log(`Calling Gemini API: ${CONFIG.AI_MODEL.GEMINI_MODEL}`);
+  Logger.log(`Payload size: ${JSON.stringify(payload).length} bytes`);
+
+  const response = UrlFetchApp.fetch(url, options);
+  const statusCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  Logger.log(`Response Status: ${statusCode}`);
+
+  if (statusCode === 429) {
+    // Parse retryDelay from Gemini error response and retry once
+    let retryDelayMs = 30000; // Default 30s
+    try {
+      const errorData = JSON.parse(responseText);
+      const retryInfo = errorData?.error?.details?.find(
+        (d) => d["@type"] === "type.googleapis.com/google.rpc.RetryInfo",
+      );
+      if (retryInfo?.retryDelay) {
+        const seconds = parseInt(retryInfo.retryDelay.replace("s", ""), 10);
+        if (!isNaN(seconds)) retryDelayMs = (seconds + 2) * 1000; // Add 2s buffer
+      }
+    } catch (e) {
+      /* ignore parse error, use default */
+    }
+
+    Logger.log(
+      `[Gemini] 429 rate limit hit. Retrying after ${retryDelayMs / 1000}s...`,
+    );
+    showProgress(
+      `Rate limit hit. Waiting ${Math.round(retryDelayMs / 1000)}s before retry...`,
+    );
+    Utilities.sleep(retryDelayMs);
+
+    // Retry the request once
+    const retryResponse = UrlFetchApp.fetch(url, options);
+    const retryStatus = retryResponse.getResponseCode();
+    const retryText = retryResponse.getContentText();
+    Logger.log(`[Gemini] Retry response status: ${retryStatus}`);
+
+    if (retryStatus !== 200) {
+      let errorDetails = retryText;
+      try {
+        errorDetails = JSON.stringify(JSON.parse(retryText), null, 2);
+      } catch (e) {
+        /* not JSON */
+      }
+      throw new Error(
+        `Gemini API returned ${retryStatus} after retry. Details: ${errorDetails}`,
+      );
+    }
+
+    // Reassign for processing below
+    Object.defineProperty(options, "_retryData", { value: retryText });
+    return parseGeminiResponseText(retryText);
+  }
+
+  if (statusCode !== 200) {
+    let errorDetails = responseText;
+    try {
+      const errorData = JSON.parse(responseText);
+      errorDetails = JSON.stringify(errorData, null, 2);
+    } catch (e) {
+      // Response is not JSON
+    }
+    throw new Error(
+      `Gemini API returned ${statusCode}. Details: ${errorDetails}`,
+    );
+  }
+
+  return parseGeminiResponseText(responseText);
+}
+
+/**
+ * Parses the raw text from a Gemini API response into a JSON array.
+ * Extracted to allow reuse between initial call and 429 retry.
+ * @param {string} responseText - Raw response body from Gemini
+ * @returns {Array} Parsed array of AI response objects
+ */
+function parseGeminiResponseText(responseText) {
+  const data = JSON.parse(responseText);
+
+  // Gemini response structure: { candidates: [{ content: { parts: [{ text: "..." }] } }] }
+  if (
+    !data.candidates ||
+    !data.candidates[0] ||
+    !data.candidates[0].content ||
+    !data.candidates[0].content.parts ||
+    !data.candidates[0].content.parts[0]
+  ) {
+    throw new Error(`Invalid Gemini response structure: ${responseText}`);
+  }
+
+  const content = data.candidates[0].content.parts[0].text;
+  Logger.log(`Gemini Response length: ${content.length} characters`);
+  Logger.log(`Gemini Response (first 500 chars): ${content.substring(0, 500)}`);
+  Logger.log(
+    `Gemini Response (last 500 chars): ${content.substring(Math.max(0, content.length - 500))}`,
+  );
+
+  // Strip markdown code fences if present
+  let cleanContent = content.trim();
+  if (cleanContent.startsWith("```")) {
+    cleanContent = cleanContent.replace(/^```(?:json)?\s*\n?/, "");
+    cleanContent = cleanContent.replace(/\n?```\s*$/, "");
+  }
+
+  // Parse JSON response (handle both single object and array)
+  try {
+    const parsed = JSON.parse(cleanContent);
+    const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+    Logger.log(
+      `Successfully parsed ${resultArray.length} items from Gemini response`,
+    );
+    return resultArray;
+  } catch (e) {
+    Logger.log(`JSON parse error: ${e.message}`);
+    Logger.log(`Attempting to extract valid JSON from response...`);
+
+    // If not valid JSON, try to extract JSON array from the response
+    const jsonMatch = cleanContent.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+        Logger.log(`Extracted ${resultArray.length} items from partial JSON`);
+        return resultArray;
+      } catch (e2) {
+        Logger.log(`Failed to parse extracted JSON: ${e2.message}`);
+
+        // Try to fix incomplete JSON array by truncating to last complete object
+        let fixedJson = jsonMatch[0].trim();
+        Logger.log(
+          `Attempting to fix truncated JSON (length: ${fixedJson.length})...`,
+        );
+
+        // Find the last complete JSON object closing brace
+        const lastBrace = fixedJson.lastIndexOf("}");
+        if (lastBrace !== -1) {
+          fixedJson = fixedJson.substring(0, lastBrace + 1) + "]";
+          try {
+            const parsed = JSON.parse(fixedJson);
+            const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+            Logger.log(
+              `Fixed truncated JSON, extracted ${resultArray.length} items (response was cut off)`,
+            );
+            return resultArray;
+          } catch (e3) {
+            Logger.log(`Failed to fix at last brace: ${e3.message}`);
+
+            // Last resort: find the last complete object by scanning backwards for "},\n" or "}\n"
+            const lastCompleteMatch = fixedJson.match(
+              /([\s\S]*\})\s*[,\]]?\s*[^\]]*$/,
+            );
+            if (lastCompleteMatch) {
+              const attempt = lastCompleteMatch[1].trim();
+              const finalAttempt = attempt.startsWith("[")
+                ? attempt + "]"
+                : "[" + attempt + "]";
+              try {
+                const parsed = JSON.parse(finalAttempt);
+                const resultArray = Array.isArray(parsed) ? parsed : [parsed];
+                Logger.log(
+                  `Last-resort fix extracted ${resultArray.length} items`,
+                );
+                return resultArray;
+              } catch (e4) {
+                Logger.log(`Last-resort fix also failed: ${e4.message}`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Final fallback: try extracting a single object (mirrors parseOpenAIResponseText)
+    const objMatch = cleanContent.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      try {
+        const parsed = JSON.parse(objMatch[0]);
+        Logger.log(`Extracted single object from Gemini response`);
+        return [parsed];
+      } catch (e5) {
+        Logger.log(`Single object extraction also failed: ${e5.message}`);
+      }
+    }
+
+    Logger.log(`Full response for debugging: ${cleanContent}`);
+    throw new Error(
+      `Failed to parse Gemini response as JSON. Response length: ${content.length} chars. Parse error: ${e.message}`,
+    );
+  }
+}
+
+/*******************************************************
+ * QUALITY CHECKLIST FUNCTIONALITY
+ *******************************************************/
+
+/**
+ * Main function to analyze VPAT quality checklist
+ * Reads questions from "Quality Requirements" sheet
+ * Groups by criteria number and processes in batches
+ * Writes AI responses back to the AI Response column
+ */
+function analyzeQualityChecklist() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  try {
+    // Step 1: Get file ID from Start sheet
+    const fileId = getVPATFileIdForAnalysis();
+    if (!fileId) return;
+
+    // Step 2: Load questions from Quality Requirements sheet
+    showProgress("Loading quality requirements...");
+    const requirements = loadQualityRequirements(ss);
+
+    if (requirements.length === 0) {
+      throw new Error(
+        `No requirements found in "${CONFIG.QUALITY_CHECKLIST.SHEET_NAME}" sheet`,
+      );
+    }
+
+    // Step 3: Group requirements by Category column value
+    const criteriaGroups = groupRequirementsByCriteria(requirements);
+    Logger.log(
+      `Grouped ${requirements.length} requirements into ${criteriaGroups.length} category groups`,
+    );
+
+    // Step 4: Load VPAT document text
+    showProgress("Loading VPAT document...");
+    const documentText = extractFullDocumentText(fileId);
+    Logger.log(`Extracted ${documentText.length} characters from document`);
+
+    // Step 5: Get system prompt
+    const systemPrompt = getQualityChecklistPrompt(ss);
+
+    // Step 6: Process category groups in batches
+    showProgress(`Analyzing ${criteriaGroups.length} category groups...`);
+    const allResponses = processCriteriaGroups(
+      criteriaGroups,
+      documentText,
+      systemPrompt,
+    );
+
+    // Step 7: Write responses back to the AI Response column
+    showProgress("Writing AI responses to sheet...");
+    writeQualityResponses(ss, allResponses);
+
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      `✓ Quality analysis complete! ${allResponses.length} requirements evaluated`,
+      "Success",
+      10,
+    );
+  } catch (error) {
+    console.error(
+      `[analyzeQualityChecklist] Unhandled error during quality checklist analysis. ` +
+        `Error: ${error.message}\nStack: ${error.stack}`,
+    );
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      "Quality analysis failed. Check the Apps Script logs for details.",
+      "Quality Analysis Failed",
+      10,
+    );
+  } finally {
+    hideProgress();
+  }
+}
+
+/**
+ * Gets VPAT file ID from the Start sheet (cell A5)
+ * @returns {string|null} File ID or null if not found
+ */
+function getVPATFileIdForAnalysis() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const startSheet = ss.getSheetByName(CONFIG.START_SHEET_NAME);
+
+  if (!startSheet) {
+    throw new Error(
+      `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with the file ID in cell A5.`,
+    );
+  }
+
+  const fileId = startSheet.getRange(CONFIG.FILE_ID_CELL).getValue();
+
+  if (!fileId || String(fileId).trim() === "") {
+    throw new Error(
+      `File ID not found in cell ${CONFIG.FILE_ID_CELL} of "${CONFIG.START_SHEET_NAME}" sheet. Please enter the Google Drive file ID.`,
+    );
+  }
+
+  return String(fileId).trim();
+}
+
+/**
+ * Reads all column headers from row 1 of the quality checklist sheet and returns
+ * a map of CONFIG key → 0-based column index. Throws if a required column is missing.
+ * Scans every row until a header row is found (handles title rows above the header).
+ * Also sets colMap._headerRow (1-based sheet row of the header).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @returns {Object} e.g. { REQ_ID: 0, CATEGORY: 2, _headerRow: 2, ... }
+ */
+function resolveQualityChecklistColumns(sheet) {
+  const colHeaders = CONFIG.QUALITY_CHECKLIST.COLUMN_HEADERS;
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  const allRows = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+  // Required columns that must be present for the row to count as the header.
+  // REQ_ID is intentionally omitted — we auto-generate it when missing.
+  const required = [
+    "REQUIREMENT_TITLE",
+    "REQUIREMENT_DESCRIPTION",
+    "AI_RESPONSE",
+    "ORIGINAL_FROM_VPAT",
+    "AI_EXPLANATION",
+  ];
+
+  let colMap = null;
+  let headerRowIndex = -1; // 0-based index into allRows
+
+  for (let r = 0; r < allRows.length; r++) {
+    const candidate = {};
+    allRows[r].forEach((h, idx) => {
+      const headerStr = String(h || "").trim();
+      for (const [key, name] of Object.entries(colHeaders)) {
+        if (headerStr.toLowerCase() === name.toLowerCase()) {
+          candidate[key] = idx; // 0-based column index
+        }
+      }
+    });
+
+    // Accept this row as the header if all required columns are present
+    const allPresent = required.every((key) => candidate[key] !== undefined);
+    if (allPresent) {
+      colMap = candidate;
+      headerRowIndex = r;
+      break;
+    }
+  }
+
+  if (!colMap) {
+    const missing = required
+      .filter((key) => !colMap || colMap[key] === undefined)
+      .map((key) => colHeaders[key]);
+    throw new Error(
+      `Could not find a header row containing all required columns in sheet "${sheet.getName()}". ` +
+        `Missing: ${missing.join(", ")}. ` +
+        `Check spelling — expected: ${required.map((k) => colHeaders[k]).join(", ")}.`,
+    );
+  }
+
+  colMap._headerRow = headerRowIndex + 1; // store as 1-based sheet row number
+
+  Logger.log(
+    `Quality checklist header found at sheet row ${colMap._headerRow}. ` +
+      `Column map: ${JSON.stringify(
+        Object.fromEntries(
+          Object.entries(colMap)
+            .filter(([k]) => k !== "_headerRow")
+            .map(([k, v]) => [k, v + 1]),
+        ),
+      )} (1-based)`,
+  );
+  return colMap;
+}
+
+/**
+ * Loads quality requirements from the single flat table in the Quality Requirements sheet.
+ * Columns are resolved by header name — position in the sheet does not matter.
+ * The "Category" column is captured and used later to group requirements into batches.
+ */
+function loadQualityRequirements(spreadsheet) {
+  const sheetName = CONFIG.QUALITY_CHECKLIST.SHEET_NAME;
+  const sheet = spreadsheet.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(`Sheet "${sheetName}" not found.`);
+  }
+
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+
+  if (lastRow < 2) {
+    throw new Error(`Sheet "${sheetName}" has no data rows.`);
+  }
+
+  // Build column map from header row (header may not be on row 1)
+  const colMap = resolveQualityChecklistColumns(sheet);
+  const headerRowIdx = colMap._headerRow - 1; // 0-based index of header in allData
+
+  const allData = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+  const requirements = [];
+
+  // Data starts immediately after the header row
+  for (let i = headerRowIdx + 1; i < allData.length; i++) {
+    const row = allData[i];
+    const reqIdStr =
+      colMap.REQ_ID !== undefined
+        ? String(row[colMap.REQ_ID] ?? "").trim()
+        : "";
+    const titleStr = String(
+      colMap.REQUIREMENT_TITLE !== undefined
+        ? row[colMap.REQUIREMENT_TITLE]
+        : "",
+    ).trim();
+    const descStr = String(
+      colMap.REQUIREMENT_DESCRIPTION !== undefined
+        ? row[colMap.REQUIREMENT_DESCRIPTION]
+        : "",
+    ).trim();
+
+    // Skip header-like rows
+    if (reqIdStr.match(/^(reqid|req id|requirement id)$/i)) {
+      Logger.log(`Row ${i + 1}: skipping repeated header row`);
+      continue;
+    }
+
+    // Skip fully empty rows
+    if (!titleStr && !descStr) {
+      continue;
+    }
+
+    const category =
+      colMap.CATEGORY !== undefined
+        ? String(row[colMap.CATEGORY] ?? "").trim() || "Uncategorized"
+        : "Uncategorized";
+
+    const sheetRowIndex = i + 1; // 1-based sheet row number (for writing back)
+
+    requirements.push({
+      rowIndex: sheetRowIndex,
+      category: category,
+      reqId: reqIdStr || `REQ_${requirements.length + 1}`,
+      title: titleStr,
+      description: descStr,
+      evaluationGuidance: String(
+        colMap.EVALUATION_GUIDANCE !== undefined
+          ? row[colMap.EVALUATION_GUIDANCE]
+          : "",
+      ).trim(),
+      impact: String(
+        colMap.IMPACT !== undefined ? row[colMap.IMPACT] : "",
+      ).trim(),
+      type: String(colMap.TYPE !== undefined ? row[colMap.TYPE] : "").trim(),
+    });
+
+    Logger.log(
+      `Row ${sheetRowIndex}: added "${reqIdStr}" — category="${category}", title="${titleStr.substring(0, 40)}"`,
+    );
+  }
+
+  Logger.log(
+    `Loaded ${requirements.length} quality requirements from "${sheetName}"`,
+  );
+  return requirements;
+}
+
+// loadQualityRequirementsFromRange has been removed — the sheet now uses a single
+// flat table with a "Category" column for grouping. See loadQualityRequirements().
+
+/**
+ * @deprecated kept as a tombstone marker — do not call
+ */
+function loadQualityRequirementsFromRange() {
+  throw new Error(
+    "loadQualityRequirementsFromRange is no longer used. " +
+      "Use loadQualityRequirements() instead.",
+  );
+}
+
+/**
+ * Groups requirements by their Category column value.
+ * Each unique category becomes one batch group sent to the AI together.
+ * Preserves the original row order within each category.
+ * @param {Array} requirements
+ * @returns {Array} Array of { criteriaNum: string, requirements: Array }
+ */
+function groupRequirementsByCriteria(requirements) {
+  const categoryMap = new Map();
+
+  for (const req of requirements) {
+    const category = req.category || "Uncategorized";
+    if (!categoryMap.has(category)) {
+      categoryMap.set(category, []);
+    }
+    categoryMap.get(category).push(req);
+  }
+
+  const groups = Array.from(categoryMap.entries()).map(([category, reqs]) => ({
+    criteriaNum: category,
+    requirements: reqs,
+  }));
+
+  Logger.log(`Created ${groups.length} category groups`);
+  groups.forEach((g) => {
+    Logger.log(
+      `  Category "${g.criteriaNum}": ${g.requirements.length} requirements`,
+    );
+  });
+
+  return groups;
+}
+
+/**
+ * Extracts full text from VPAT document for analysis
+ */
+function extractFullDocumentText(fileId) {
+  const documentData = loadDocument(fileId);
+
+  try {
+    const doc = DocumentApp.openById(documentData.tempDocId || fileId);
+    const body = doc.getBody();
+    let fullText = body.getText();
+
+    // Truncate if too long
+    const maxLength = CONFIG.QUALITY_CHECKLIST.MAX_DOC_LENGTH;
+    if (fullText.length > maxLength) {
+      Logger.log(
+        `Document truncated from ${fullText.length} to ${maxLength} characters`,
+      );
+      fullText =
+        fullText.substring(0, maxLength) +
+        "\n\n[Document truncated for analysis...]";
+    }
+
+    // Cleanup temp doc if created
+    if (documentData.tempDocId) {
+      cleanup(documentData.tempDocId);
+    }
+
+    return fullText;
+  } catch (error) {
+    if (documentData.tempDocId) {
+      cleanup(documentData.tempDocId);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Gets quality checklist system prompt from the Prompts sheet.
+ * Throws if the sheet or prompt row is missing — add a row with
+ * Prompt Name = "QUALITY_CHECKLIST_ANALYSIS" to the Advanced Settings Configuration sheet.
+ */
+function getQualityChecklistPrompt(spreadsheet) {
+  const promptsSheet = spreadsheet.getSheetByName(CONFIG.PROMPTS_SHEET_NAME);
+
+  if (!promptsSheet) {
+    throw new Error(
+      `"${CONFIG.PROMPTS_SHEET_NAME}" sheet not found. Please create it with columns: "Prompt Name" and "Prompt Text".`,
+    );
+  }
+
+  const data = promptsSheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    const name = data[i][CONFIG.PROMPT_NAME_COLUMN - 1];
+    if (name === CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME) {
+      const promptText = String(
+        data[i][CONFIG.PROMPT_TEXT_COLUMN - 1] || "",
+      ).trim();
+      if (promptText) {
+        return promptText;
+      }
+      throw new Error(
+        `Prompt "${CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME}" exists in "${CONFIG.PROMPTS_SHEET_NAME}" but its text is empty.`,
+      );
+    }
+  }
+
+  throw new Error(
+    `Prompt "${CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME}" not found in "${CONFIG.PROMPTS_SHEET_NAME}" sheet.`,
+  );
+}
+
+/**
+ * Processes category groups in batches using AI.
+ * Batches by number of requirements (not category groups) for better reliability.
+ */
+function processCriteriaGroups(criteriaGroups, documentText, systemPrompt) {
+  const allResponses = [];
+  const batchSize = CONFIG.QUALITY_CHECKLIST.REQUIREMENTS_BATCH_SIZE;
+
+  // Flatten all requirements from all criteria groups
+  const allRequirements = [];
+  for (const group of criteriaGroups) {
+    for (const req of group.requirements) {
+      allRequirements.push(req);
+    }
+  }
+
+  Logger.log(
+    `Total requirements to process: ${allRequirements.length}, batch size: ${batchSize}`,
+  );
+
+  // Process requirements in batches
+  for (let i = 0; i < allRequirements.length; i += batchSize) {
+    const batchRequirements = allRequirements.slice(i, i + batchSize);
+    const batchNum = Math.floor(i / batchSize) + 1;
+    const totalBatches = Math.ceil(allRequirements.length / batchSize);
+
+    try {
+      showProgress(
+        `Processing batch ${batchNum} of ${totalBatches} (${batchRequirements.length} questions)...`,
+      );
+
+      // Build message for this batch of requirements
+      const userMessage = buildQualityChecklistMessageFromRequirements(
+        batchRequirements,
+        documentText,
+      );
+
+      // Call AI
+      Logger.log(
+        `Sending batch ${batchNum}/${totalBatches} to AI: ${batchRequirements.length} requirements`,
+      );
+      const batchResponses = callAIForInterpretation(systemPrompt, userMessage);
+
+      const expectedCount = batchRequirements.length;
+      Logger.log(
+        `AI returned ${batchResponses.length} responses (expected ${expectedCount})`,
+      );
+
+      if (batchResponses.length < expectedCount) {
+        Logger.log(
+          `⚠️ WARNING: AI returned incomplete response! Got ${batchResponses.length} out of ${expectedCount} expected responses.`,
+        );
+        Logger.log(
+          `This may be due to token limits. Consider reducing batch size or document length.`,
+        );
+      }
+
+      Logger.log(
+        `AI response structure: ${JSON.stringify(batchResponses).substring(0, 500)}...`,
+      );
+
+      // Parse and match responses to requirements
+      const parsedResponses = parseQualityChecklistResponsesFromRequirements(
+        batchRequirements,
+        batchResponses,
+      );
+      Logger.log(`Parsed ${parsedResponses.length} responses after matching`);
+      allResponses.push(...parsedResponses);
+
+      // Rate limiting between batches
+      if (i + batchSize < allRequirements.length) {
+        Utilities.sleep(CONFIG.API_DELAY_MS);
+      }
+    } catch (error) {
+      console.error(
+        `[Quality Checklist] Batch ${batchNum}/${totalBatches} failed. ` +
+          `Requirements in batch: ${batchRequirements.map((r) => r.reqId).join(", ")}. ` +
+          `Error: ${error.message}\nStack: ${error.stack}`,
+      );
+
+      // Add sanitized error responses — never write raw error messages to cells
+      for (const req of batchRequirements) {
+        allResponses.push({
+          rowIndex: req.rowIndex,
+          reqId: req.reqId,
+          response: "Something went wrong",
+          originalFromVpat: "",
+          explanation: "",
+        });
+      }
+    }
+  }
+
+  return allResponses;
+}
+
+/**
+ * Builds AI message for a batch of requirements (flat list)
+ */
+function buildQualityChecklistMessageFromRequirements(
+  requirements,
+  documentText,
+) {
+  let message = `VPAT Document Content:\n${"=".repeat(80)}\n${documentText}\n${"=".repeat(80)}\n\n`;
+
+  message += `Analyze the document above and answer the following quality checklist questions.\n\n`;
+
+  for (let i = 0; i < requirements.length; i++) {
+    const req = requirements[i];
+
+    message += `Question ${i}:\n`;
+    message += `Req ID: ${req.reqId}\n`;
+
+    if (req.title) {
+      message += `Requirement Title: ${req.title}\n`;
+    }
+
+    if (req.description) {
+      message += `Requirement Description: ${req.description}\n`;
+    }
+
+    if (req.evaluationGuidance) {
+      message += `Evaluation Guidance: ${req.evaluationGuidance}\n`;
+    }
+
+    if (req.impact) {
+      message += `Impact: ${req.impact}\n`;
+    }
+
+    if (req.type) {
+      message += `Type: ${req.type}\n`;
+    }
+
+    message += `\n`;
+  }
+
+  message += `Return a JSON array with ${requirements.length} objects (one per question, in the same order):\n`;
+  message += `[\n`;
+  message += `  {\n`;
+  message += `    "reqId": "E-07",\n`;
+  message += `    "response": true,  // MUST be boolean true or false only (checkbox value)\n`;
+  message += `    "originalFromVpat": "Exact quote from VPAT (MAX 300 chars, truncate with '...' if longer), or empty string if not found",\n`;
+  message += `    "explanation": "Your reasoning and analysis (MAX 500 chars, truncate with '...' if longer)",\n`;
+  message += `    "confidence": 85\n`;
+  message += `  },\n`;
+  message += `  ...\n`;
+  message += `]\n`;
+  message += `\nIMPORTANT: The "response" field MUST be a boolean (true or false), not a string.\n`;
+  message += `IMPORTANT: "originalFromVpat" MUST NOT exceed 300 characters. Truncate with "..." if needed.\n`;
+  message += `IMPORTANT: "explanation" MUST NOT exceed 500 characters. Truncate with "..." if needed.\n`;
+
+  return message;
+}
+
+/**
+ * Parses AI responses and matches them to requirements (flat list)
+ */
+function parseQualityChecklistResponsesFromRequirements(
+  requirements,
+  aiResponses,
+) {
+  const results = [];
+
+  Logger.log(
+    `Quality Checklist Parsing: ${requirements.length} requirements, ${aiResponses.length} AI responses`,
+  );
+  Logger.log(
+    `Expected requirement IDs: ${requirements.map((r) => r.reqId).join(", ")}`,
+  );
+
+  if (aiResponses.length > 0) {
+    Logger.log(
+      `AI response IDs: ${aiResponses.map((r) => r.reqId || "NO_ID").join(", ")}`,
+    );
+  }
+
+  // Create a map of reqId -> AI response for efficient lookup
+  const aiResponseMap = new Map();
+  aiResponses.forEach((resp, index) => {
+    if (resp.reqId) {
+      aiResponseMap.set(resp.reqId, resp);
+    } else {
+      Logger.log(`Warning: AI response at index ${index} missing reqId`);
+    }
+  });
+
+  // Match AI responses to requirements
+  for (let i = 0; i < requirements.length; i++) {
+    const req = requirements[i];
+
+    // Try to match by reqId first, fall back to index-based matching
+    let aiResponse;
+    if (aiResponseMap.has(req.reqId)) {
+      aiResponse = aiResponseMap.get(req.reqId);
+    } else if (aiResponses[i]) {
+      aiResponse = aiResponses[i];
+      Logger.log(`Matched by index for ${req.reqId} (AI didn't include reqId)`);
+    } else {
+      aiResponse = {};
+      Logger.log(`No AI response found for ${req.reqId} at index ${i}`);
+    }
+
+    // Extract separate fields
+    const response = aiResponse.response || "No response";
+    // Truncate originalFromVpat to 300 chars as a safety net (Gemini sometimes ignores the limit)
+    let originalFromVpat = aiResponse.originalFromVpat || "";
+    if (originalFromVpat.length > 300) {
+      originalFromVpat = originalFromVpat.substring(0, 297) + "...";
+    }
+    // Truncate explanation to 500 chars as a safety net
+    let explanation = aiResponse.explanation || "";
+    if (explanation.length > 500) {
+      explanation = explanation.substring(0, 497) + "...";
+    }
+
+    // Add confidence to explanation if provided
+    if (aiResponse.confidence !== undefined) {
+      explanation +=
+        (explanation ? "\n\n" : "") + `Confidence: ${aiResponse.confidence}%`;
+    }
+
+    results.push({
+      rowIndex: req.rowIndex,
+      reqId: req.reqId,
+      response: response,
+      originalFromVpat: originalFromVpat,
+      explanation: explanation,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Builds AI message for a batch of criteria groups (legacy - kept for reference)
+ */
+function buildQualityChecklistMessage(criteriaGroups, documentText) {
+  let message = `VPAT Document Content:\n${"=".repeat(80)}\n${documentText}\n${"=".repeat(80)}\n\n`;
+
+  message += `Analyze the document above and answer the following quality checklist questions.\n`;
+  message += `Questions are grouped by criteria. Answer each question based on the document content.\n\n`;
+
+  let questionIndex = 0;
+
+  for (const group of criteriaGroups) {
+    message += `CRITERIA ${group.criteriaNum}:\n`;
+    // Include criteria name if available for first requirement in group
+    if (group.requirements.length > 0 && group.requirements[0].criteriaName) {
+      message += `Section: ${group.requirements[0].criteriaName}\n`;
+    }
+    message += `-`.repeat(40) + `\n`;
+
+    for (const req of group.requirements) {
+      message += `\nQuestion ${questionIndex}:\n`;
+      message += `Req ID: ${req.reqId}\n`;
+      message += `Question: ${req.question}\n`;
+
+      if (req.responseType) {
+        message += `Expected Response Type: ${req.responseType}\n`;
+      }
+
+      if (req.criteriaName) {
+        message += `VPAT Section to Check: ${req.criteriaName}\n`;
+      }
+
+      if (req.aiGuidelines) {
+        message += `AI Guidelines: ${req.aiGuidelines}\n`;
+      }
+
+      questionIndex++;
+    }
+
+    message += `\n`;
+  }
+
+  message += `\nReturn a JSON array with ${questionIndex} objects (one per question, in the same order):\n`;
+  message += `[\n`;
+  message += `  {\n`;
+  message += `    "reqId": "E-07",\n`;
+  message += `    "response": "Your direct answer ONLY based on Response Type (e.g., just 'Yes', 'March 2024', or brief text)",\n`;
+  message += `    "originalFromVpat": "Exact quote from VPAT document if found, otherwise empty string",\n`;
+  message += `    "explanation": "Your reasoning and interpretation that led to this answer",\n`;
+  message += `    "confidence": 85\n`;
+  message += `  },\n`;
+  message += `  ...\n`;
+  message += `]\n`;
+
+  return message;
+}
+
+/**
+ * Parses AI responses and matches them to requirements
+ */
+function parseQualityChecklistResponses(criteriaGroups, aiResponses) {
+  const results = [];
+
+  // Flatten groups to get expected order
+  const allRequirements = [];
+  for (const group of criteriaGroups) {
+    for (const req of group.requirements) {
+      allRequirements.push(req);
+    }
+  }
+
+  Logger.log(
+    `Quality Checklist Parsing: ${allRequirements.length} requirements, ${aiResponses.length} AI responses`,
+  );
+  Logger.log(
+    `Expected requirement IDs: ${allRequirements.map((r) => r.reqId).join(", ")}`,
+  );
+
+  if (aiResponses.length > 0) {
+    Logger.log(
+      `AI response IDs: ${aiResponses.map((r) => r.reqId || "NO_ID").join(", ")}`,
+    );
+  }
+
+  // Create a map of reqId -> AI response for efficient lookup
+  const aiResponseMap = new Map();
+  aiResponses.forEach((resp, index) => {
+    if (resp.reqId) {
+      aiResponseMap.set(resp.reqId, resp);
+      Logger.log(`Mapped AI response for reqId ${resp.reqId}`);
+    } else {
+      Logger.log(
+        `Warning: AI response at index ${index} missing reqId, will use index-based matching`,
+      );
+    }
+  });
+
+  // Match AI responses to requirements
+  for (let i = 0; i < allRequirements.length; i++) {
+    const req = allRequirements[i];
+
+    // Try to match by reqId first, fall back to index-based matching
+    let aiResponse;
+    if (aiResponseMap.has(req.reqId)) {
+      aiResponse = aiResponseMap.get(req.reqId);
+      Logger.log(`Matched by reqId: ${req.reqId}`);
+    } else if (aiResponses[i]) {
+      aiResponse = aiResponses[i];
+      Logger.log(
+        `Matched by index ${i}: ${req.reqId} (AI didn't include reqId)`,
+      );
+    } else {
+      aiResponse = {};
+      Logger.log(`No AI response found for ${req.reqId} at index ${i}`);
+    }
+
+    Logger.log(
+      `Processing ${req.reqId}: response="${aiResponse.response !== undefined ? aiResponse.response : "NO RESPONSE"}"`,
+    );
+
+    // Extract and normalize response to boolean (true/false)
+    let response;
+    if (typeof aiResponse.response === "boolean") {
+      response = aiResponse.response;
+    } else if (typeof aiResponse.response === "string") {
+      const responseStr = String(aiResponse.response).toLowerCase().trim();
+      // Convert common string responses to boolean
+      if (
+        responseStr === "true" ||
+        responseStr === "yes" ||
+        responseStr === "pass" ||
+        responseStr === "compliant"
+      ) {
+        response = true;
+      } else if (
+        responseStr === "false" ||
+        responseStr === "no" ||
+        responseStr === "fail" ||
+        responseStr === "non-compliant"
+      ) {
+        response = false;
+      } else {
+        response = false; // Default to false if unclear
+        Logger.log(
+          `Warning: Unclear response "${aiResponse.response}" for ${req.reqId}, defaulting to false`,
+        );
+      }
+    } else {
+      response = false; // Default to false if no response
+    }
+
+    const originalFromVpat = aiResponse.originalFromVpat || "";
+    let explanation = aiResponse.explanation || "";
+
+    // Add confidence to explanation if provided
+    if (aiResponse.confidence !== undefined) {
+      explanation +=
+        (explanation ? "\n\n" : "") + `Confidence: ${aiResponse.confidence}%`;
+    }
+
+    results.push({
+      rowIndex: req.rowIndex,
+      reqId: req.reqId,
+      response: response,
+      originalFromVpat: originalFromVpat,
+      explanation: explanation,
+    });
+
+    Logger.log(`✓ Prepared response for ${req.reqId}: ${response}`);
+  }
+
+  return results;
+}
+
+/**
+ * Writes AI responses back to the Quality Requirements sheet
+ * Only fills the AI Response column (column H)
+ */
+function writeQualityResponses(spreadsheet, responses) {
+  const sheetName = CONFIG.QUALITY_CHECKLIST.SHEET_NAME;
+  const sheet = spreadsheet.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(`Sheet "${sheetName}" not found`);
+  }
+
+  // Resolve output column positions from header row (position-independent)
+  const colMap = resolveQualityChecklistColumns(sheet);
+  const responseCol = colMap.AI_RESPONSE + 1; // convert 0-based → 1-based
+  const originalCol = colMap.ORIGINAL_FROM_VPAT + 1;
+  const explanationCol = colMap.AI_EXPLANATION + 1;
+
+  // Write each response to its row (3 columns)
+  Logger.log(`Writing ${responses.length} responses to sheet...`);
+  for (const resp of responses) {
+    try {
+      Logger.log(
+        `Writing row ${resp.rowIndex} (${resp.reqId}): response=${resp.response}, original="${(resp.originalFromVpat || "").substring(0, 30)}..."`,
+      );
+
+      // Write AI Response (checkbox boolean value)
+      sheet.getRange(resp.rowIndex, responseCol).setValue(resp.response);
+
+      // Write Original from VPAT (exact quote)
+      sheet
+        .getRange(resp.rowIndex, originalCol)
+        .setValue(resp.originalFromVpat);
+
+      // Write AI Explanation (reasoning)
+      sheet.getRange(resp.rowIndex, explanationCol).setValue(resp.explanation);
+
+      Logger.log(`✓ Wrote response to row ${resp.rowIndex}: ${resp.reqId}`);
+    } catch (error) {
+      console.error(
+        `[Quality Checklist] Failed to write row ${resp.rowIndex} (ReqID: ${resp.reqId}). ` +
+          `Error: ${error.message}\nStack: ${error.stack}`,
+      );
+    }
+  }
+
+  Logger.log(
+    `Wrote ${responses.length} responses to 3 columns (AI Response, Original from VPAT, AI Explanation)`,
+  );
+}
+
+/*******************************************************
+ * AI MODEL INTEGRATION (LEGACY - KEPT FOR COMPATIBILITY)
+ *******************************************************/
+
+/**
+ * Calls AI model to process text
+ * @param {string} text - Input text
+ * @returns {Object} Parsed response
+ */
+function callAIModel(text) {
+  const provider = CONFIG.AI_MODEL.PROVIDER;
+
+  if (provider === "GEMINI") {
+    return callGeminiAPI(text);
+  } else if (provider === "OPENAI") {
+    return callOpenAIAPI(text);
+  } else {
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+}
+
+/**
+ * Calls Gemini API (legacy function for compatibility)
+ * @param {string} text - Input text
+ * @returns {Object} Parsed response
+ */
+function callGeminiAPI(text) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const apiKey = getAPIKeyFromSheet(ss);
+
+  const url = `${CONFIG.AI_MODEL.GEMINI_BASE_URL}/models/${CONFIG.AI_MODEL.GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          {
+            text: text,
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 4096,
+    },
+  };
+
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  };
+
+  const response = UrlFetchApp.fetch(url, options);
+  const statusCode = response.getResponseCode();
+  const responseText = response.getContentText();
+
+  if (statusCode !== 200) {
+    let errorDetails = responseText;
+    try {
+      const errorData = JSON.parse(responseText);
+      errorDetails = JSON.stringify(errorData, null, 2);
+    } catch (e) {
+      // Response is not JSON
+    }
+    throw new Error(
+      `Gemini API returned ${statusCode}. Details: ${errorDetails}`,
+    );
+  }
+
+  const data = JSON.parse(responseText);
+
+  if (
+    !data.candidates ||
+    !data.candidates[0] ||
+    !data.candidates[0].content ||
+    !data.candidates[0].content.parts ||
+    !data.candidates[0].content.parts[0]
+  ) {
+    throw new Error(`Invalid Gemini response structure: ${responseText}`);
+  }
+
+  const content = data.candidates[0].content.parts[0].text;
+
+  try {
+    return JSON.parse(content);
+  } catch (e) {
+    return { response: content };
+  }
+}
+
+/**
+ * Calls OpenAI API
+ * @param {string} text - Input text
+ * @returns {Object} Parsed response
+ */
+function callOpenAIAPI(text) {
+  const apiKey =
+    PropertiesService.getScriptProperties().getProperty("OPENAI_API_KEY");
+
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY not set in Script Properties.");
+  }
+
+  // TODO: Implement OpenAI API call when needed
+  throw new Error("OpenAI API integration not yet implemented.");
+}
