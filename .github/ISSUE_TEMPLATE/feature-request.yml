@@ -10,6 +10,11 @@ body:
     attributes:
       value: |
         Thanks for taking the time to suggest a feature for the VPAT Analyzer.
+        
+        > **[!WARNING] Do Not Include Sensitive Information**
+        > Feature requests are **publicly visible**. Do not include any sensitive or confidential information, such as passwords, API keys, or private data.
+        > Email [NYU Digital Accessibility (digital-accessibility@nyu.edu)](mailto:digital-accessibility@nyu.edu) for assistance.
+
   - type: textarea
     id: problem-description
     attributes:
