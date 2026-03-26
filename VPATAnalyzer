@@ -375,7 +375,7 @@ function getUserInput() {
   // Validate file ID
   if (!fileId) {
     throw new Error(
-      `A valid Google Drive file ID was not found in cell ${CONFIG.FILE_ID_CELL} of "${CONFIG.START_SHEET_NAME}". Enter a raw file ID, full Drive URL, or file chip. If a file chip was used, check the Apps Script execution log for chip metadata read errors.`,
+      `A valid Google Drive file reference accessible to the script was not found in cell ${CONFIG.FILE_ID_CELL} of "${CONFIG.START_SHEET_NAME}". Enter a raw file ID, full Drive URL, or file chip. If a file chip was used, check the Apps Script execution log for chip metadata read errors.`,
     );
   }
 
@@ -437,7 +437,11 @@ function resolveDriveFileIdFromRange(range) {
     return extractDriveFileId(chipUrl);
   }
 
-  return rawIdFallback;
+  if (rawIdFallback && isAccessibleDriveFileId(rawIdFallback)) {
+    return rawIdFallback;
+  }
+
+  return "";
 }
 
 /**
@@ -548,6 +552,21 @@ function getDriveFileChipUrlFromRange(range) {
   }
 
   return "";
+}
+
+/**
+ * Checks whether the script can resolve a Drive file ID to an accessible file.
+ * @param {string} fileId - Candidate Drive file ID
+ * @returns {boolean} True when the file exists and the script can access it
+ */
+function isAccessibleDriveFileId(fileId) {
+  try {
+    DriveApp.getFileById(fileId);
+    return true;
+  } catch (error) {
+    Logger.log(`Drive file lookup failed for candidate ID "${fileId}": ${error.message}`);
+    return false;
+  }
 }
 
 /*******************************************************
@@ -2304,7 +2323,7 @@ function getVPATFileIdForAnalysis() {
 
   if (!fileId) {
     throw new Error(
-      `A valid Google Drive file ID was not found in cell ${CONFIG.FILE_ID_CELL} of "${CONFIG.START_SHEET_NAME}". Enter a raw file ID, full Drive URL, or file chip. If a file chip was used, check the Apps Script execution log for chip metadata read errors.`,
+      `A valid Google Drive file reference accessible to the script was not found in cell ${CONFIG.FILE_ID_CELL} of "${CONFIG.START_SHEET_NAME}". Enter a raw file ID, full Drive URL, or file chip. If a file chip was used, check the Apps Script execution log for chip metadata read errors.`,
     );
   }
 
