@@ -83,8 +83,8 @@ const CONFIG = {
       EVALUATION_GUIDANCE: "Evaluation Guidance",
       IMPACT: "Impact",
       TYPE: "Type",
-      AI_RESPONSE: "AI Response",
-      ORIGINAL_FROM_VPAT: "Original from VPAT",
+      AI_RESPONSE: "AI Pass/Fail",
+      ORIGINAL_FROM_VPAT: "Original Text from VPAT",
       AI_EXPLANATION: "AI Explanation",
     },
 
@@ -1062,23 +1062,21 @@ function getPromptFromSheet(spreadsheet) {
 
     if (!promptsSheet) {
       throw new Error(
-        `"${CONFIG.PROMPTS_SHEET_NAME}" sheet not found. Please create it with columns: "Prompt Name" and "Prompt Text"`,
+        `"${CONFIG.PROMPTS_SHEET_NAME}" sheet not found. Please create it with prompt entries in columns A and B.`,
       );
     }
 
     const data = promptsSheet.getDataRange().getValues();
+    const promptEntry = findPromptConfigEntry(
+      data,
+      CONFIG.INTERPRET_PROMPT_NAME,
+    );
 
-    // Find the prompt by name (skip header row)
-    for (let i = 1; i < data.length; i++) {
-      const promptName = data[i][CONFIG.PROMPT_NAME_COLUMN - 1];
-      const promptText = data[i][CONFIG.PROMPT_TEXT_COLUMN - 1];
-
-      if (promptName === CONFIG.INTERPRET_PROMPT_NAME) {
-        if (!promptText) {
-          throw new Error(`Prompt "${CONFIG.INTERPRET_PROMPT_NAME}" is empty.`);
-        }
-        return promptText;
+    if (promptEntry) {
+      if (!promptEntry.text) {
+        throw new Error(`Prompt "${CONFIG.INTERPRET_PROMPT_NAME}" is empty.`);
       }
+      return promptEntry.text;
     }
 
     throw new Error(
@@ -1173,18 +1171,16 @@ function getConfidenceThreshold(spreadsheet) {
     }
 
     const data = promptsSheet.getDataRange().getValues();
+    const confidenceEntry = findPromptConfigEntry(
+      data,
+      CONFIG.CONFIDENCE_LEVEL_NAME,
+    );
 
-    // Find the confidence level setting (skip header row)
-    for (let i = 1; i < data.length; i++) {
-      const promptName = data[i][CONFIG.PROMPT_NAME_COLUMN - 1];
-      const promptText = data[i][CONFIG.PROMPT_TEXT_COLUMN - 1];
-
-      if (promptName === CONFIG.CONFIDENCE_LEVEL_NAME) {
-        const threshold = parseInt(promptText, 10);
-        if (!isNaN(threshold) && threshold >= 0 && threshold <= 100) {
-          Logger.log(`Using confidence threshold: ${threshold}`);
-          return threshold;
-        }
+    if (confidenceEntry) {
+      const threshold = parseInt(confidenceEntry.text, 10);
+      if (!isNaN(threshold) && threshold >= 0 && threshold <= 100) {
+        Logger.log(`Using confidence threshold: ${threshold}`);
+        return threshold;
       }
     }
 
@@ -1196,6 +1192,37 @@ function getConfidenceThreshold(spreadsheet) {
     Logger.log(`Error reading confidence threshold: ${error.message}`);
     return CONFIG.DEFAULT_CONFIDENCE_THRESHOLD;
   }
+}
+
+function normalizePromptConfigNameCell(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  const prefixedMatch = normalized.match(/^prompt name\s+(.+)$/i);
+  return prefixedMatch ? prefixedMatch[1].trim() : normalized;
+}
+
+function normalizePromptConfigTextCell(value) {
+  const text = String(value || "").trim();
+  return text.replace(/^prompt text\s+/i, "").trim();
+}
+
+function findPromptConfigEntry(data, entryName) {
+  for (let i = 0; i < data.length; i++) {
+    const promptName = normalizePromptConfigNameCell(
+      data[i][CONFIG.PROMPT_NAME_COLUMN - 1],
+    );
+
+    if (promptName === entryName) {
+      return {
+        rowNumber: i + 1,
+        name: promptName,
+        text: normalizePromptConfigTextCell(
+          data[i][CONFIG.PROMPT_TEXT_COLUMN - 1],
+        ),
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -2023,7 +2050,7 @@ function parseGeminiResponseText(responseText) {
  * Main function to analyze VPAT quality checklist
  * Reads questions from "Quality Requirements" sheet
  * Groups by criteria number and processes in batches
- * Writes AI responses back to the AI Response column
+ * Writes AI responses back to the quality analysis output columns
  */
 function analyzeQualityChecklist() {
   const ui = SpreadsheetApp.getUi();
@@ -2066,7 +2093,7 @@ function analyzeQualityChecklist() {
       systemPrompt,
     );
 
-    // Step 7: Write responses back to the AI Response column
+    // Step 7: Write responses back to the quality analysis output columns
     showProgress("Writing AI responses to sheet...");
     writeQualityResponses(ss, allResponses);
 
@@ -2145,9 +2172,8 @@ function resolveQualityChecklistColumns(sheet) {
   for (let r = 0; r < allRows.length; r++) {
     const candidate = {};
     allRows[r].forEach((h, idx) => {
-      const headerStr = String(h || "").trim();
       for (const [key, name] of Object.entries(colHeaders)) {
-        if (headerStr.toLowerCase() === name.toLowerCase()) {
+        if (qualityHeaderMatches(h, name)) {
           candidate[key] = idx; // 0-based column index
         }
       }
@@ -2186,6 +2212,20 @@ function resolveQualityChecklistColumns(sheet) {
       )} (1-based)`,
   );
   return colMap;
+}
+
+function normalizeQualityHeaderValue(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function qualityHeaderMatches(headerValue, expectedHeader) {
+  const normalizedHeader = normalizeQualityHeaderValue(headerValue);
+  const normalizedExpected = normalizeQualityHeaderValue(expectedHeader);
+
+  return (
+    normalizedHeader === normalizedExpected ||
+    normalizedHeader.endsWith(` ${normalizedExpected}`)
+  );
 }
 
 /**
@@ -2363,7 +2403,7 @@ function extractFullDocumentText(fileId) {
 }
 
 /**
- * Gets quality checklist system prompt from the Prompts sheet.
+ * Gets quality checklist system prompt from the configuration sheet.
  * Throws if the sheet or prompt row is missing — add a row with
  * Prompt Name = "QUALITY_CHECKLIST_ANALYSIS" to the Advanced Settings Configuration sheet.
  */
@@ -2372,25 +2412,24 @@ function getQualityChecklistPrompt(spreadsheet) {
 
   if (!promptsSheet) {
     throw new Error(
-      `"${CONFIG.PROMPTS_SHEET_NAME}" sheet not found. Please create it with columns: "Prompt Name" and "Prompt Text".`,
+      `"${CONFIG.PROMPTS_SHEET_NAME}" sheet not found. Please create it with prompt entries in columns A and B.`,
     );
   }
 
   const data = promptsSheet.getDataRange().getValues();
 
-  for (let i = 1; i < data.length; i++) {
-    const name = data[i][CONFIG.PROMPT_NAME_COLUMN - 1];
-    if (name === CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME) {
-      const promptText = String(
-        data[i][CONFIG.PROMPT_TEXT_COLUMN - 1] || "",
-      ).trim();
-      if (promptText) {
-        return promptText;
-      }
-      throw new Error(
-        `Prompt "${CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME}" exists in "${CONFIG.PROMPTS_SHEET_NAME}" but its text is empty.`,
-      );
+  const promptEntry = findPromptConfigEntry(
+    data,
+    CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME,
+  );
+
+  if (promptEntry) {
+    if (promptEntry.text) {
+      return promptEntry.text;
     }
+    throw new Error(
+      `Prompt "${CONFIG.QUALITY_CHECKLIST.SYSTEM_PROMPT_NAME}" exists in "${CONFIG.PROMPTS_SHEET_NAME}" but its text is empty.`,
+    );
   }
 
   throw new Error(
@@ -2483,9 +2522,9 @@ function processCriteriaGroups(criteriaGroups, documentText, systemPrompt) {
         allResponses.push({
           rowIndex: req.rowIndex,
           reqId: req.reqId,
-          response: "Something went wrong",
+          response: "Fail",
           originalFromVpat: "",
-          explanation: "",
+          explanation: "AI analysis failed for this batch. Review manually.",
         });
       }
     }
@@ -2538,14 +2577,14 @@ function buildQualityChecklistMessageFromRequirements(
   message += `[\n`;
   message += `  {\n`;
   message += `    "reqId": "E-07",\n`;
-  message += `    "response": true,  // MUST be boolean true or false only (checkbox value)\n`;
+  message += `    "response": "Pass",  // MUST be the exact string "Pass" or "Fail"\n`;
   message += `    "originalFromVpat": "Exact quote from VPAT (MAX 300 chars, truncate with '...' if longer), or empty string if not found",\n`;
   message += `    "explanation": "Your reasoning and analysis (MAX 500 chars, truncate with '...' if longer)",\n`;
   message += `    "confidence": 85\n`;
   message += `  },\n`;
   message += `  ...\n`;
   message += `]\n`;
-  message += `\nIMPORTANT: The "response" field MUST be a boolean (true or false), not a string.\n`;
+  message += `\nIMPORTANT: The "response" field MUST be the exact string "Pass" or "Fail".\n`;
   message += `IMPORTANT: "originalFromVpat" MUST NOT exceed 300 characters. Truncate with "..." if needed.\n`;
   message += `IMPORTANT: "explanation" MUST NOT exceed 500 characters. Truncate with "..." if needed.\n`;
 
@@ -2601,7 +2640,7 @@ function parseQualityChecklistResponsesFromRequirements(
     }
 
     // Extract separate fields
-    const response = aiResponse.response || "No response";
+    const response = normalizeQualityPassFail(aiResponse.response);
     // Truncate originalFromVpat to 300 chars as a safety net (Gemini sometimes ignores the limit)
     let originalFromVpat = aiResponse.originalFromVpat || "";
     if (originalFromVpat.length > 300) {
@@ -2629,6 +2668,57 @@ function parseQualityChecklistResponsesFromRequirements(
   }
 
   return results;
+}
+
+function normalizeQualityPassFail(value) {
+  if (typeof value === "boolean") {
+    return value ? "Pass" : "Fail";
+  }
+
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) {
+    return "Fail";
+  }
+
+  const passValues = [
+    "pass",
+    "passed",
+    "true",
+    "yes",
+    "y",
+    "compliant",
+    "meets",
+    "met",
+    "supports",
+  ];
+  const failValues = [
+    "fail",
+    "failed",
+    "false",
+    "no",
+    "n",
+    "non-compliant",
+    "not compliant",
+    "does not meet",
+    "does not support",
+  ];
+
+  if (
+    passValues.includes(normalized) ||
+    normalized.startsWith("pass ")
+  ) {
+    return "Pass";
+  }
+
+  if (
+    failValues.includes(normalized) ||
+    normalized.startsWith("fail ")
+  ) {
+    return "Fail";
+  }
+
+  Logger.log(`Warning: Unclear quality response "${value}", defaulting to Fail`);
+  return "Fail";
 }
 
 /**
@@ -2751,36 +2841,7 @@ function parseQualityChecklistResponses(criteriaGroups, aiResponses) {
       `Processing ${req.reqId}: response="${aiResponse.response !== undefined ? aiResponse.response : "NO RESPONSE"}"`,
     );
 
-    // Extract and normalize response to boolean (true/false)
-    let response;
-    if (typeof aiResponse.response === "boolean") {
-      response = aiResponse.response;
-    } else if (typeof aiResponse.response === "string") {
-      const responseStr = String(aiResponse.response).toLowerCase().trim();
-      // Convert common string responses to boolean
-      if (
-        responseStr === "true" ||
-        responseStr === "yes" ||
-        responseStr === "pass" ||
-        responseStr === "compliant"
-      ) {
-        response = true;
-      } else if (
-        responseStr === "false" ||
-        responseStr === "no" ||
-        responseStr === "fail" ||
-        responseStr === "non-compliant"
-      ) {
-        response = false;
-      } else {
-        response = false; // Default to false if unclear
-        Logger.log(
-          `Warning: Unclear response "${aiResponse.response}" for ${req.reqId}, defaulting to false`,
-        );
-      }
-    } else {
-      response = false; // Default to false if no response
-    }
+    const response = normalizeQualityPassFail(aiResponse.response);
 
     const originalFromVpat = aiResponse.originalFromVpat || "";
     let explanation = aiResponse.explanation || "";
@@ -2806,8 +2867,8 @@ function parseQualityChecklistResponses(criteriaGroups, aiResponses) {
 }
 
 /**
- * Writes AI responses back to the Quality Requirements sheet
- * Only fills the AI Response column (column H)
+ * Writes AI responses back to the Quality Requirements sheet.
+ * Fills the AI Pass/Fail, Original Text from VPAT, and AI Explanation columns.
  */
 function writeQualityResponses(spreadsheet, responses) {
   const sheetName = CONFIG.QUALITY_CHECKLIST.SHEET_NAME;
@@ -2831,10 +2892,10 @@ function writeQualityResponses(spreadsheet, responses) {
         `Writing row ${resp.rowIndex} (${resp.reqId}): response=${resp.response}, original="${(resp.originalFromVpat || "").substring(0, 30)}..."`,
       );
 
-      // Write AI Response (checkbox boolean value)
+      // Write AI Pass/Fail as normalized text values
       sheet.getRange(resp.rowIndex, responseCol).setValue(resp.response);
 
-      // Write Original from VPAT (exact quote)
+      // Write Original Text from VPAT (exact quote)
       sheet
         .getRange(resp.rowIndex, originalCol)
         .setValue(resp.originalFromVpat);
@@ -2852,7 +2913,7 @@ function writeQualityResponses(spreadsheet, responses) {
   }
 
   Logger.log(
-    `Wrote ${responses.length} responses to 3 columns (AI Response, Original from VPAT, AI Explanation)`,
+    `Wrote ${responses.length} responses to 3 columns (AI Pass/Fail, Original Text from VPAT, AI Explanation)`,
   );
 }
 
