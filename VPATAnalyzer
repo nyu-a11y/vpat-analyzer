@@ -166,7 +166,7 @@ function runFullProcessingWithQuality() {
 /**
  * Button-friendly version: Runs complete VPAT processing pipeline
  * Assign this function to a button for one-click processing
- * Processes: 1) Extract data, 2) Interpret with AI, 3) Quality analysis
+ * Processes: 1) Assessment info, 2) Extract data, 3) Interpret with AI, 4) Quality analysis
  *
  * TO ASSIGN TO A BUTTON:
  * 1. Insert > Drawing (create a button/shape)
@@ -199,31 +199,45 @@ function runCompleteAnalysis() {
   unhideAllSheets();
 
   try {
+    const userConfig = getUserInput();
+
     // Show starting message
     ss.toast("Starting complete VPAT analysis...", "Processing", 5);
 
-    // Step 1: Extract from VPAT document
+    // Step 1: Fill Assessment Information
     ss.toast(
-      "Step 1/3: Extracting data from VPAT document...",
+      "Step 1/4: Filling assessment information...",
       "Processing",
       -1,
     );
-    const extractionResult = processVPATDocument();
+    const assessmentResult = processAssessmentInformation(userConfig.fileId);
+    if (!assessmentResult || !assessmentResult.success) {
+      return;
+    }
+    Utilities.sleep(2000);
+
+    // Step 2: Extract from VPAT document
+    ss.toast(
+      "Step 2/4: Extracting data from VPAT document...",
+      "Processing",
+      -1,
+    );
+    const extractionResult = processVPATDocument(userConfig);
     if (!extractionResult || !extractionResult.success) {
       return;
     }
     Utilities.sleep(2000);
 
-    // Step 2: AI interpretation
-    ss.toast("Step 2/3: Running AI interpretation...", "Processing", -1);
+    // Step 3: AI interpretation
+    ss.toast("Step 3/4: Running AI interpretation...", "Processing", -1);
     const interpretationResult = interpretConformanceLevels(true); // Skip prompt in automated mode
     if (!interpretationResult || !interpretationResult.success) {
       return;
     }
     Utilities.sleep(2000);
 
-    // Step 3: Quality checklist analysis
-    ss.toast("Step 3/3: Analyzing quality requirements...", "Processing", -1);
+    // Step 4: Quality checklist analysis
+    ss.toast("Step 4/4: Analyzing quality requirements...", "Processing", -1);
     const qualityResult = analyzeQualityChecklist();
     if (!qualityResult || !qualityResult.success) {
       return;
@@ -301,8 +315,9 @@ function runAssessmentInformation() {
 /**
  * Main entry point for VPAT processing (extraction only)
  * Orchestrates the entire workflow
+ * @param {Object|null} userConfigOverride - Optional preloaded config from the Start sheet
  */
-function processVPATDocument() {
+function processVPATDocument(userConfigOverride) {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.OUTPUT_SHEET_NAME);
@@ -315,7 +330,7 @@ function processVPATDocument() {
 
   try {
     // Step 1: Get user input from Start sheet
-    const userConfig = getUserInput();
+    const userConfig = userConfigOverride || getUserInput();
     if (!userConfig) {
       return; // Configuration not available
     }
