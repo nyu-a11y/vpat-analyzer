@@ -11,7 +11,7 @@
  *******************************************************/
 const CONFIG = {
   // Output Sheet Name
-  OUTPUT_SHEET_NAME: "2) VPAT/ACR - Line-item Review",
+  OUTPUT_SHEET_NAME: "3) VPAT/ACR - Line-item Review",
 
   // Sheet Column Names
   COLUMN_NAMES: {
@@ -41,10 +41,10 @@ const CONFIG = {
 
   // Start Sheet Configuration
   START_SHEET_NAME: "1) Start",
-  SCORING_SHEET_NAME: "4) Scoring",
-  FILE_ID_CELL: "A5", // Cell containing the Google Drive file ID
-  AI_PROVIDER_CELL: "B5", // Cell containing AI Provider selection
-  API_KEY_CELL: "C5", // Cell containing the API key for selected provider
+  SCORING_SHEET_NAME: "5) Scoring",
+  FILE_ID_CELL: "A3", // Cell containing the Google Drive file ID
+  API_KEY_CELL: "B3", // Cell containing the API key for selected provider
+  AI_PROVIDER_CELL: "C3", // Cell containing AI Provider selection
 
   // AI Model Configuration
   AI_MODEL: {
@@ -74,7 +74,7 @@ const CONFIG = {
 
   // Quality Checklist Configuration
   QUALITY_CHECKLIST: {
-    SHEET_NAME: "3) Quality Requirements",
+    SHEET_NAME: "4) Quality Requirements",
 
     // Column header names — used to dynamically resolve column positions at runtime.
     // Column order in the sheet does NOT matter; headers are matched case-insensitively.
@@ -360,7 +360,7 @@ function processVPATDocument() {
 
 /**
  * Gets processing configuration from the Start sheet
- * @returns {Object|null} Configuration object with fileId from A5
+ * @returns {Object|null} Configuration object with fileId from A3
  */
 function getUserInput() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -368,7 +368,7 @@ function getUserInput() {
 
   if (!startSheet) {
     throw new Error(
-      `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with the file ID in cell A5.`,
+      `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with the file ID in cell ${CONFIG.FILE_ID_CELL}.`,
     );
   }
 
@@ -1102,9 +1102,9 @@ function getPromptFromSheet(spreadsheet) {
 }
 
 /**
- * Gets the API key from the Start sheet (cell C5)
+ * Gets the API key from the Start sheet (cell B3)
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet
- * @returns {string} API key from cell C5
+ * @returns {string} API key from cell B3
  */
 function getAPIKeyFromSheet(spreadsheet) {
   try {
@@ -1112,7 +1112,7 @@ function getAPIKeyFromSheet(spreadsheet) {
 
     if (!startSheet) {
       throw new Error(
-        `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with API key in cell C5.`,
+        `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with API key in cell ${CONFIG.API_KEY_CELL}.`,
       );
     }
 
@@ -1131,7 +1131,7 @@ function getAPIKeyFromSheet(spreadsheet) {
 }
 
 /**
- * Gets the AI provider from the Start sheet (cell B5)
+ * Gets the AI provider from the Start sheet (cell C3)
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet
  * @returns {string} Provider name ("OPENAI" or "GEMINI")
  */
@@ -2121,7 +2121,7 @@ function analyzeQualityChecklist() {
 }
 
 /**
- * Gets VPAT file ID from the Start sheet (cell A5)
+ * Gets VPAT file ID from the Start sheet (cell A3)
  * @returns {string|null} File ID or null if not found
  */
 function getVPATFileIdForAnalysis() {
@@ -2130,7 +2130,7 @@ function getVPATFileIdForAnalysis() {
 
   if (!startSheet) {
     throw new Error(
-      `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with the file ID in cell A5.`,
+      `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it with the file ID in cell ${CONFIG.FILE_ID_CELL}.`,
     );
   }
 
