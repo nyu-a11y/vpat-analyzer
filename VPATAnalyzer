@@ -382,6 +382,87 @@ function getUserInput() {
   return { fileId: String(fileId).trim(), startRow: null, endRow: null };
 }
 
+/**
+ * Resolves a Google Drive file ID from a Start-sheet cell.
+ * Supports raw IDs, full Drive URLs, and file chips with link URLs.
+ * @param {GoogleAppsScript.Spreadsheet.Range} range - Cell containing the file reference
+ * @returns {string} Resolved Drive file ID or empty string if none could be parsed
+ */
+function resolveDriveFileIdFromRange(range) {
+  const richText = range.getRichTextValue();
+  const candidates = [];
+
+  if (richText) {
+    const linkUrl = richText.getLinkUrl();
+    if (linkUrl) {
+      candidates.push(linkUrl);
+    }
+
+    const runs = richText.getRuns();
+    if (runs && runs.length > 0) {
+      for (const run of runs) {
+        const runLink = run.getLinkUrl();
+        if (runLink) {
+          candidates.push(runLink);
+          break;
+        }
+      }
+    }
+  }
+
+  candidates.push(range.getValue());
+  candidates.push(range.getDisplayValue());
+
+  for (const candidate of candidates) {
+    const fileId = extractDriveFileId(candidate);
+    if (fileId) {
+      return fileId;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Extracts a Google Drive file ID from a raw ID or supported Google URL.
+ * @param {string} value - Raw cell value, display text, or link URL
+ * @returns {string} Drive file ID or empty string if none could be parsed
+ */
+function extractDriveFileId(value) {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (looksLikeDriveFileId(text)) {
+    return text;
+  }
+
+  const patterns = [
+    /\/d\/([a-zA-Z0-9_-]{20,})/,
+    /[?&]id=([a-zA-Z0-9_-]{20,})/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Checks whether a string looks like a Google Drive file ID.
+ * @param {string} value - Candidate string
+ * @returns {boolean} True when the value matches the expected ID shape
+ */
+function looksLikeDriveFileId(value) {
+  return /^[a-zA-Z0-9_-]{20,}$/.test(String(value || "").trim());
+}
+
 /*******************************************************
  * SHEET VALIDATION AND COLUMN MAPPING
  *******************************************************/
