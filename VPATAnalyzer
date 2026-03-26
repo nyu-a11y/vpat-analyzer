@@ -116,10 +116,12 @@ function onOpen() {
     .createMenu("VPAT Analyzer")
     .addItem("1) Run VPAT Analyzer", "runCompleteAnalysis")
     .addSeparator()
-    .addItem("2.1) Extract from Doc (only)", "runExtraction")
-    .addItem("2.2) AI Interpretation", "runInterpretation")
+    .addItem("2.1) Fill Assessment Information", "runAssessmentInformation")
     .addSeparator()
-    .addItem("3.1) Run Quality Requirements", "runQualityAnalysis")
+    .addItem("3.1) Extract from Doc (only)", "runExtraction")
+    .addItem("3.2) AI Interpretation", "runInterpretation")
+    .addSeparator()
+    .addItem("4.1) Run Quality Requirements", "runQualityAnalysis")
     .addToUi();
 }
 
