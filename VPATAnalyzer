@@ -124,10 +124,14 @@ function onOpen() {
  * Runs both extraction and interpretation in sequence
  */
 function runFullProcessing() {
-  processVPATDocument();
+  const extractionResult = processVPATDocument();
+  if (!extractionResult || !extractionResult.success) {
+    return extractionResult;
+  }
+
   // Small delay between operations
   Utilities.sleep(2000);
-  interpretConformanceLevels();
+  return interpretConformanceLevels();
 }
 
 /**
@@ -135,11 +139,19 @@ function runFullProcessing() {
  * This function can be assigned to a button in Google Sheets
  */
 function runFullProcessingWithQuality() {
-  processVPATDocument();
+  const extractionResult = processVPATDocument();
+  if (!extractionResult || !extractionResult.success) {
+    return extractionResult;
+  }
+
   Utilities.sleep(2000);
-  interpretConformanceLevels();
+  const interpretationResult = interpretConformanceLevels();
+  if (!interpretationResult || !interpretationResult.success) {
+    return interpretationResult;
+  }
+
   Utilities.sleep(2000);
-  analyzeQualityChecklist();
+  return analyzeQualityChecklist();
 }
 
 /**
@@ -186,17 +198,26 @@ function runCompleteAnalysis() {
       "Processing",
       -1,
     );
-    processVPATDocument();
+    const extractionResult = processVPATDocument();
+    if (!extractionResult || !extractionResult.success) {
+      return;
+    }
     Utilities.sleep(2000);
 
     // Step 2: AI interpretation
     ss.toast("Step 2/3: Running AI interpretation...", "Processing", -1);
-    interpretConformanceLevels(true); // Skip prompt in automated mode
+    const interpretationResult = interpretConformanceLevels(true); // Skip prompt in automated mode
+    if (!interpretationResult || !interpretationResult.success) {
+      return;
+    }
     Utilities.sleep(2000);
 
     // Step 3: Quality checklist analysis
     ss.toast("Step 3/3: Analyzing quality requirements...", "Processing", -1);
-    analyzeQualityChecklist();
+    const qualityResult = analyzeQualityChecklist();
+    if (!qualityResult || !qualityResult.success) {
+      return;
+    }
 
     // Success message
     ss.toast("✓ Complete analysis finished successfully!", "Success", 10);
@@ -305,7 +326,7 @@ function processVPATDocument() {
         "Error",
         10,
       );
-      return;
+      return { success: false, reason: "no-criteria" };
     }
 
     // Step 5: Show progress indicator
@@ -320,6 +341,16 @@ function processVPATDocument() {
     );
     const vpatData = extractVPATData(documentData.tables, criteriaMap);
 
+    if (Object.keys(vpatData).length === 0) {
+      cleanup(documentData.tempDocId);
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        "No matching VPAT rows were found. Check the file and try again.",
+        "Nothing Processed",
+        10,
+      );
+      return { success: false, reason: "no-matches" };
+    }
+
     // Step 9: Write data to sheet
     showProgress(`Writing data to sheet...`);
     const results = writeDataToSheet(sheet, vpatData, columnMap);
@@ -328,9 +359,19 @@ function processVPATDocument() {
     showProgress(`Cleaning up temporary files...`);
     cleanup(documentData.tempDocId);
 
+    if (results.rowsUpdated === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        "No rows were updated. Check the file and try again.",
+        "Nothing Processed",
+        10,
+      );
+      return { success: false, reason: "no-updates", results: results };
+    }
+
     // Use toast instead of blocking alert
     const message = `✓ Complete! Updated ${results.rowsUpdated} of ${results.totalRows} rows`;
     SpreadsheetApp.getActiveSpreadsheet().toast(message, "Success", 10);
+    return { success: true, results: results };
   } catch (error) {
     Logger.log(`Error in processVPATDocument: ${error.message}`);
     Logger.log(error.stack);
@@ -341,6 +382,7 @@ function processVPATDocument() {
       "Processing Failed",
       10,
     );
+    return { success: false, reason: "error", message: error.message };
   } finally {
     // Always hide progress, never throw
     try {
@@ -369,6 +411,8 @@ function getUserInput() {
     );
   }
 
+  confirmStartFileIdCellSelection(startSheet);
+
   const fileIdRange = startSheet.getRange(CONFIG.FILE_ID_CELL);
   const fileId = resolveDriveFileIdFromRange(fileIdRange);
 
@@ -381,6 +425,40 @@ function getUserInput() {
 
   // Return file ID with null for row numbers (process all rows)
   return { fileId: fileId, startRow: null, endRow: null };
+}
+
+/**
+ * Warns the user when the Drive file cell is still selected.
+ * Apps Script can't tell the difference between a selected cell and a cell
+ * still being edited, so this confirmation helps prevent using a stale value.
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} startSheet - The Start sheet
+ */
+function confirmStartFileIdCellSelection(startSheet) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const activeSheet = ss.getActiveSheet();
+  const activeRange = ss.getActiveRange();
+
+  if (!activeSheet || !activeRange) {
+    return;
+  }
+
+  if (
+    activeSheet.getSheetId() === startSheet.getSheetId() &&
+    activeRange.getA1Notation() === CONFIG.FILE_ID_CELL
+  ) {
+    const ui = SpreadsheetApp.getUi();
+    const response = ui.alert(
+      "Google Drive File",
+      `Cell ${CONFIG.FILE_ID_CELL} is still selected. If you just changed it, press Cancel, then press Enter or click another cell to save it. Press OK to continue with the value already saved in the sheet.`,
+      ui.ButtonSet.OK_CANCEL,
+    );
+
+    if (response !== ui.Button.OK) {
+      throw new Error(
+        `Finish entering the Google Drive file in cell ${CONFIG.FILE_ID_CELL} first, then run again.`,
+      );
+    }
+  }
 }
 
 /**
@@ -1055,7 +1133,7 @@ function interpretConformanceLevels(skipPrompt) {
       // Manual mode: ask user
       userConfig = getRowRangeForInterpretation(ui);
       if (!userConfig) {
-        return; // User cancelled
+        return { success: false, reason: "cancelled" };
       }
     }
 
@@ -1084,7 +1162,7 @@ function interpretConformanceLevels(skipPrompt) {
         "No Data",
         5,
       );
-      return;
+      return { success: false, reason: "no-data" };
     }
 
     // Step 5: Process each row with AI
@@ -1097,9 +1175,19 @@ function interpretConformanceLevels(skipPrompt) {
       confidenceThreshold,
     );
 
+    if (results.success === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        "AI interpretation didn't update any rows.",
+        "Nothing Processed",
+        10,
+      );
+      return { success: false, reason: "no-updates", results: results };
+    }
+
     // Step 6: Show completion
     const message = `✓ Interpreted ${results.success} of ${rowsToProcess.length} rows`;
     SpreadsheetApp.getActiveSpreadsheet().toast(message, "Success", 10);
+    return { success: true, results: results };
   } catch (error) {
     Logger.log(`Error in interpretConformanceLevels: ${error.message}`);
     Logger.log(error.stack);
@@ -1108,6 +1196,7 @@ function interpretConformanceLevels(skipPrompt) {
       "Interpretation Failed",
       10,
     );
+    return { success: false, reason: "error", message: error.message };
   } finally {
     hideProgress();
   }
@@ -2246,7 +2335,9 @@ function analyzeQualityChecklist() {
   try {
     // Step 1: Get file ID from Start sheet
     const fileId = getVPATFileIdForAnalysis();
-    if (!fileId) return;
+    if (!fileId) {
+      return { success: false, reason: "no-file-id" };
+    }
 
     // Step 2: Load questions from Quality Requirements sheet
     showProgress("Loading quality requirements...");
@@ -2282,13 +2373,23 @@ function analyzeQualityChecklist() {
 
     // Step 7: Write responses back to the quality analysis output columns
     showProgress("Writing AI responses to sheet...");
-    writeQualityResponses(ss, allResponses);
+    const writeResults = writeQualityResponses(ss, allResponses);
+
+    if (writeResults.rowsWritten === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast(
+        "Quality analysis ran, but no rows were written to the sheet.",
+        "Nothing Processed",
+        10,
+      );
+      return { success: false, reason: "no-writes", results: writeResults };
+    }
 
     SpreadsheetApp.getActiveSpreadsheet().toast(
-      `✓ Quality analysis complete! ${allResponses.length} requirements evaluated`,
+      `✓ Quality analysis complete! Updated ${writeResults.rowsWritten} of ${writeResults.totalRows} requirements`,
       "Success",
       10,
     );
+    return { success: true, count: writeResults.rowsWritten, results: writeResults };
   } catch (error) {
     console.error(
       `[analyzeQualityChecklist] Unhandled error during quality checklist analysis. ` +
@@ -2299,6 +2400,7 @@ function analyzeQualityChecklist() {
       "Quality Analysis Failed",
       10,
     );
+    return { success: false, reason: "error", message: error.message };
   } finally {
     hideProgress();
   }
@@ -2317,6 +2419,8 @@ function getVPATFileIdForAnalysis() {
       `Sheet "${CONFIG.START_SHEET_NAME}" not found. Please create it and put the file ID, Google Drive link, or file chip in cell ${CONFIG.FILE_ID_CELL}.`,
     );
   }
+
+  confirmStartFileIdCellSelection(startSheet);
 
   const fileIdRange = startSheet.getRange(CONFIG.FILE_ID_CELL);
   const fileId = resolveDriveFileIdFromRange(fileIdRange);
@@ -3071,6 +3175,7 @@ function writeQualityResponses(spreadsheet, responses) {
   const responseCol = colMap.AI_RESPONSE + 1; // convert 0-based → 1-based
   const originalCol = colMap.ORIGINAL_FROM_VPAT + 1;
   const explanationCol = colMap.AI_EXPLANATION + 1;
+  let rowsWritten = 0;
 
   // Write each response to its row (3 columns)
   Logger.log(`Writing ${responses.length} responses to sheet...`);
@@ -3092,6 +3197,7 @@ function writeQualityResponses(spreadsheet, responses) {
       sheet.getRange(resp.rowIndex, explanationCol).setValue(resp.explanation);
 
       Logger.log(`✓ Wrote response to row ${resp.rowIndex}: ${resp.reqId}`);
+      rowsWritten++;
     } catch (error) {
       console.error(
         `[Quality Checklist] Failed to write row ${resp.rowIndex} (ReqID: ${resp.reqId}). ` +
@@ -3101,8 +3207,14 @@ function writeQualityResponses(spreadsheet, responses) {
   }
 
   Logger.log(
-    `Wrote ${responses.length} responses to 3 columns (AI Pass/Fail, Original Text from VPAT, AI Explanation)`,
+    `Wrote ${rowsWritten} of ${responses.length} responses to 3 columns (AI Pass/Fail, Original Text from VPAT, AI Explanation)`,
   );
+
+  return {
+    totalRows: responses.length,
+    rowsWritten: rowsWritten,
+    rowsFailed: responses.length - rowsWritten,
+  };
 }
 
 /*******************************************************
