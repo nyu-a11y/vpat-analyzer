@@ -15,17 +15,14 @@ const CONFIG = {
 
   // Sheet Column Names
   COLUMN_NAMES: {
-    CRITERIA: "Criteria",
-    FOUND_IN_DOC: "Found in Doc", // optional — may not exist in new sheets
-    CONFORMANCE_LEVEL: "Conformance Level (author)",
-    REMARKS: "Remarks and Explanations (author)",
-    AI_COMMENT: "AI Comment",
+    CRITERIA: "Criteria (from VPAT)",
+    CONFORMANCE_LEVEL: "Conformance Level (from VPAT)",
+    REMARKS: "Remarks and Explanations (from VPAT)",
+    AI_COMMENT: "AI Evaluation Summary",
     // Interpreted columns
-    CONFORMANCE_INTERPRETED: "Standardized Conformance Level*",
-    APPLIES_TO_MEDIUMS: "Applies to (Mediums)*", // replaces the 5 separate medium columns
+    CONFORMANCE_INTERPRETED: "Standardized Conformance Level",
+    APPLIES_TO_MEDIUMS: "Applies to (Mediums)",
     INTERNAL_COMMENT: "Internal Comment",
-    // Optional/Legacy
-    NEEDS_REVIEW: "Needs Review",
   },
 
   // Processing Settings
@@ -422,12 +419,10 @@ function validateAndMapColumns(sheet) {
 
   // Optional columns (won't throw error if missing)
   const optionalColumns = [
-    "FOUND_IN_DOC", // removed from newer sheet designs
     "AI_COMMENT",
     "CONFORMANCE_INTERPRETED",
     "APPLIES_TO_MEDIUMS",
     "INTERNAL_COMMENT",
-    "NEEDS_REVIEW",
   ];
 
   // Find each column
@@ -744,11 +739,6 @@ function writeDataToSheet(sheet, vpatData, columnMap) {
         }", Remarks="${data.remarks.substring(0, 50)}..."`,
       );
 
-      // Write "Found in Doc" marker only if the column exists in this sheet
-      if (columnMap.FOUND_IN_DOC) {
-        sheet.getRange(rowNum, columnMap.FOUND_IN_DOC).setValue(true);
-      }
-
       // Write conformance level
       sheet
         .getRange(rowNum, columnMap.CONFORMANCE_LEVEL)
@@ -1022,8 +1012,6 @@ function validateAndMapColumnsForInterpretation(sheet) {
 
   // --- Optional columns (mapped if present, silently skipped if absent) ---
   const optionalColumnDefs = {
-    FOUND_IN_DOC: CONFIG.COLUMN_NAMES.FOUND_IN_DOC,
-    NEEDS_REVIEW: CONFIG.COLUMN_NAMES.NEEDS_REVIEW,
     INTERNAL_COMMENT: CONFIG.COLUMN_NAMES.INTERNAL_COMMENT,
   };
 
@@ -1279,34 +1267,23 @@ function normalizeConformanceValue(value) {
 }
 
 /**
- * Finds rows that have conformance data (from extraction)
+ * Finds rows that have conformance data from extraction.
  */
 function findRowsWithConformanceData(sheet, columnMap, startRow, endRow) {
   const numRows = endRow - startRow + 1;
-
-  // Check both "Found in Doc" and "Conformance Level (author)" columns
-  // FOUND_IN_DOC is optional — fall back to conformance-only check if absent
-  const foundInDocCol = columnMap.FOUND_IN_DOC || null;
   const conformanceCol = columnMap.CONFORMANCE_LEVEL;
 
-  // Read conformance column; conditionally read Found in Doc
   const conformanceData = sheet
     .getRange(startRow, conformanceCol, numRows, 1)
     .getValues();
-  const foundInDocData = foundInDocCol
-    ? sheet.getRange(startRow, foundInDocCol, numRows, 1).getValues()
-    : null;
 
   const rowsToProcess = [];
 
   for (let i = 0; i < numRows; i++) {
-    const foundInDoc = foundInDocData ? foundInDocData[i][0] : null;
     const conformance = conformanceData[i][0];
-
-    const hasFoundInDoc = foundInDoc === true || foundInDoc === "TRUE";
     const hasConformance = conformance && String(conformance).trim() !== "";
 
-    if (hasFoundInDoc || hasConformance) {
+    if (hasConformance) {
       rowsToProcess.push(startRow + i);
     }
   }
@@ -1480,7 +1457,7 @@ function buildBatchMessage(batchData) {
   "entryIndex": <integer matching the Entry number above>,
   "conformanceLevel": "Supports|Partially Supports|Does Not Support|Not Applicable|Not Evaluated",
   "appliesToMediums": "Comma-separated list of mediums EXPLICITLY mentioned by the author in the Remarks. Choose ONLY from: Web, Electronic Docs, Software, Closed, Authoring Tool. Use empty string if none are explicitly named.",
-  "comment": "Brief explanation only when confidence is low; otherwise empty string",
+  "comment": "Short evaluation summary explaining why the standardized conformance level fits the VPAT remarks",
   "confidence": <integer 0-100>
 }
 
@@ -1530,7 +1507,7 @@ function writeInterpretedValues(
       .setValue(normalizedConformance || "Not Evaluated");
   }
 
-  // --- Applies to (Mediums)* ---
+  // --- Applies to (Mediums) ---
   // AI returns a comma-separated string of mediums explicitly mentioned by the author.
   // Valid values: Web, Electronic Docs, Software, Closed, Authoring Tool
   const validMediums = [
@@ -1565,24 +1542,17 @@ function writeInterpretedValues(
     );
   }
 
-  // --- Confidence / AI Comment ---
+  // --- Confidence / AI Evaluation Summary ---
   const confidence = parseInt(interpretation.confidence, 10) || 0;
-  const needsReview = confidence < confidenceThreshold;
 
   Logger.log(
-    `Row ${rowNum}: Confidence=${confidence}, Threshold=${confidenceThreshold}, NeedsReview=${needsReview}`,
+    `Row ${rowNum}: Confidence=${confidence}, Threshold=${confidenceThreshold}`,
   );
 
-  // Write AI Comment ONLY when confidence is below threshold
-  const comment = needsReview
-    ? interpretation.comment || "Low confidence - please review"
-    : "";
-  sheet.getRange(rowNum, columnMap.AI_COMMENT).setValue(comment);
-
-  // Write to Needs Review column only if it exists
-  if (columnMap.NEEDS_REVIEW) {
-    sheet.getRange(rowNum, columnMap.NEEDS_REVIEW).setValue(needsReview);
-  }
+  const evaluationSummary =
+    String(interpretation.comment || "").trim() ||
+    (confidence < confidenceThreshold ? "Low confidence - please review" : "");
+  sheet.getRange(rowNum, columnMap.AI_COMMENT).setValue(evaluationSummary);
 }
 
 /*******************************************************
