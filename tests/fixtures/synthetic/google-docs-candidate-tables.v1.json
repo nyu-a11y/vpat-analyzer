@@ -1,0 +1,133 @@
+{
+  "id": "northstar-google-docs-candidate-tables",
+  "version": "1.0.0",
+  "fixtureKind": "synthetic-json-candidate-table-model",
+  "isDocumentAppProof": false,
+  "proofLimitation": "This JSON models candidate tables only. It has not been serialized from an actual Google Doc through DocumentApp or transported through google.script.run.",
+  "document": {
+    "displayName": "Northstar Collaboration Suite VPAT 2.5.docx",
+    "representedSourceType": "google-doc",
+    "displayedFileType": "DOCX",
+    "displayedSize": "1.8 MB",
+    "vpatVersion": "2.5",
+    "wcagVersion": "2.2",
+    "declaredLevels": ["A", "AA"],
+    "expectedCriterionCount": 55,
+    "qualityRequirementCount": 16,
+    "expectedItemsToReview": 4,
+    "representativeReportQuality": {"grade": "B", "percentage": 82}
+  },
+  "bodyProse": [
+    "Northstar Collaboration Suite is a synthetic product used only for deterministic tests.",
+    "The text 1.1.1 Non-text Content in this paragraph is body prose and must not become a criterion row."
+  ],
+  "candidateTables": [
+    {
+      "tableId": "table-metadata",
+      "sourceOrder": 0,
+      "headers": ["Field", "Value"],
+      "rows": [
+        {"sourceRowIndex": 1, "cells": ["Product", "Northstar Collaboration Suite"]},
+        {"sourceRowIndex": 2, "cells": ["VPAT version", "2.5"]}
+      ],
+      "expectedClassification": "non-wcag",
+      "expectedReasonCode": "NON_WCAG_TABLE"
+    },
+    {
+      "tableId": "table-wcag-22-a-aa",
+      "sourceOrder": 1,
+      "headers": ["Criteria", "Conformance Level", "Remarks and Explanations"],
+      "rows": [
+        {"sourceRowIndex":1,"cells":["1.1.1 Non-text Content","Supports","Synthetic evidence for SC 1.1.1."]},
+        {"sourceRowIndex":2,"cells":["1.2.1 Audio-only and Video-only (Prerecorded)","Supports","Synthetic evidence for SC 1.2.1."]},
+        {"sourceRowIndex":3,"cells":["1.2.2 Captions (Prerecorded)","Supports","Synthetic evidence for SC 1.2.2."]},
+        {"sourceRowIndex":4,"cells":["1.2.3 Audio Description or Media Alternative (Prerecorded)","Supports","Synthetic evidence for SC 1.2.3."]},
+        {"sourceRowIndex":5,"cells":["1.2.4 Captions (Live)","Not Applicable","Synthetic evidence for SC 1.2.4."]},
+        {"sourceRowIndex":6,"cells":["1.2.5 Audio Description (Prerecorded)","Supports","Synthetic evidence for SC 1.2.5."]},
+        {"sourceRowIndex":7,"cells":["1.3.1 Info and Relationships","Supports","Synthetic evidence for SC 1.3.1."]},
+        {"sourceRowIndex":8,"cells":["1.3.2 Meaningful Sequence","Supports","Synthetic evidence for SC 1.3.2."]},
+        {"sourceRowIndex":9,"cells":["1.3.3 Sensory Characteristics","Supports","Synthetic evidence for SC 1.3.3."]},
+        {"sourceRowIndex":10,"cells":["1.3.4 Orientation","Supports","Synthetic evidence for SC 1.3.4."]},
+        {"sourceRowIndex":11,"cells":["1.3.5 Identify Input Purpose","Supports","Synthetic evidence for SC 1.3.5."]},
+        {"sourceRowIndex":12,"cells":["1.4.1 Use of Color","Supports","Synthetic evidence for SC 1.4.1."]},
+        {"sourceRowIndex":13,"cells":["1.4.2 Audio Control","Not Applicable","Synthetic evidence for SC 1.4.2."]},
+        {"sourceRowIndex":14,"cells":["1.4.3 Contrast (Minimum)","Partially Supports","Synthetic evidence needs review for SC 1.4.3."]},
+        {"sourceRowIndex":15,"cells":["1.4.4 Resize Text","Supports","Synthetic evidence for SC 1.4.4."]},
+        {"sourceRowIndex":16,"cells":["1.4.5 Images of Text","Supports","Synthetic evidence for SC 1.4.5."]},
+        {"sourceRowIndex":17,"cells":["1.4.10 Reflow","Partially Supports","Synthetic evidence needs review for SC 1.4.10."]},
+        {"sourceRowIndex":18,"cells":["1.4.11 Non-text Contrast","Supports","Synthetic evidence for SC 1.4.11."]},
+        {"sourceRowIndex":19,"cells":["1.4.12 Text Spacing","Supports","Synthetic evidence for SC 1.4.12."]},
+        {"sourceRowIndex":20,"cells":["1.4.13 Content on Hover or Focus","Supports","Synthetic evidence for SC 1.4.13."]},
+        {"sourceRowIndex":21,"cells":["2.1.1 Keyboard","Supports","Synthetic evidence for SC 2.1.1."]},
+        {"sourceRowIndex":22,"cells":["2.1.2 No Keyboard Trap","Supports","Synthetic evidence for SC 2.1.2."]},
+        {"sourceRowIndex":23,"cells":["2.1.4 Character Key Shortcuts","Supports","Synthetic evidence for SC 2.1.4."]},
+        {"sourceRowIndex":24,"cells":["2.2.1 Timing Adjustable","Supports","Synthetic evidence for SC 2.2.1."]},
+        {"sourceRowIndex":25,"cells":["2.2.2 Pause, Stop, Hide","Supports","Synthetic evidence for SC 2.2.2."]},
+        {"sourceRowIndex":26,"cells":["2.3.1 Three Flashes or Below Threshold","Supports","Synthetic evidence for SC 2.3.1."]},
+        {"sourceRowIndex":27,"cells":["2.4.1 Bypass Blocks","Supports","Synthetic evidence for SC 2.4.1."]},
+        {"sourceRowIndex":28,"cells":["2.4.2 Page Titled","Supports","Synthetic evidence for SC 2.4.2."]},
+        {"sourceRowIndex":29,"cells":["2.4.3 Focus Order","Supports","Synthetic evidence for SC 2.4.3."]},
+        {"sourceRowIndex":30,"cells":["2.4.4 Link Purpose (In Context)","Supports","Synthetic evidence for SC 2.4.4."]},
+        {"sourceRowIndex":31,"cells":["2.4.5 Multiple Ways","Supports","Synthetic evidence for SC 2.4.5."]},
+        {"sourceRowIndex":32,"cells":["2.4.6 Headings and Labels","Supports","Synthetic evidence for SC 2.4.6."]},
+        {"sourceRowIndex":33,"cells":["2.4.7 Focus Visible","Supports","Synthetic evidence for SC 2.4.7."]},
+        {"sourceRowIndex":34,"cells":["2.4.11 Focus Not Obscured (Minimum)","Partially Supports","Synthetic evidence needs review for SC 2.4.11."]},
+        {"sourceRowIndex":35,"cells":["2.5.1 Pointer Gestures","Supports","Synthetic evidence for SC 2.5.1."]},
+        {"sourceRowIndex":36,"cells":["2.5.2 Pointer Cancellation","Supports","Synthetic evidence for SC 2.5.2."]},
+        {"sourceRowIndex":37,"cells":["2.5.3 Label in Name","Supports","Synthetic evidence for SC 2.5.3."]},
+        {"sourceRowIndex":38,"cells":["2.5.4 Motion Actuation","Supports","Synthetic evidence for SC 2.5.4."]},
+        {"sourceRowIndex":39,"cells":["2.5.7 Dragging Movements","Supports","Synthetic evidence for SC 2.5.7."]},
+        {"sourceRowIndex":40,"cells":["2.5.8 Target Size (Minimum)","Supports","Synthetic evidence for SC 2.5.8."]},
+        {"sourceRowIndex":41,"cells":["3.1.1 Language of Page","Supports","Synthetic evidence for SC 3.1.1."]},
+        {"sourceRowIndex":42,"cells":["3.1.2 Language of Parts","Supports","Synthetic evidence for SC 3.1.2."]},
+        {"sourceRowIndex":43,"cells":["3.2.1 On Focus","Supports","Synthetic evidence for SC 3.2.1."]},
+        {"sourceRowIndex":44,"cells":["3.2.2 On Input","Supports","Synthetic evidence for SC 3.2.2."]},
+        {"sourceRowIndex":45,"cells":["3.2.3 Consistent Navigation","Supports","Synthetic evidence for SC 3.2.3."]},
+        {"sourceRowIndex":46,"cells":["3.2.4 Consistent Identification","Supports","Synthetic evidence for SC 3.2.4."]},
+        {"sourceRowIndex":47,"cells":["3.2.6 Consistent Help","Supports","Synthetic evidence for SC 3.2.6."]},
+        {"sourceRowIndex":48,"cells":["3.3.1 Error Identification","Supports","Synthetic evidence for SC 3.3.1."]},
+        {"sourceRowIndex":49,"cells":["3.3.2 Labels or Instructions","Supports","Synthetic evidence for SC 3.3.2."]},
+        {"sourceRowIndex":50,"cells":["3.3.3 Error Suggestion","Supports","Synthetic evidence for SC 3.3.3."]},
+        {"sourceRowIndex":51,"cells":["3.3.4 Error Prevention (Legal, Financial, Data)","Supports","Synthetic evidence for SC 3.3.4."]},
+        {"sourceRowIndex":52,"cells":["3.3.7 Redundant Entry","Supports","Synthetic evidence for SC 3.3.7."]},
+        {"sourceRowIndex":53,"cells":["3.3.8 Accessible Authentication (Minimum)","Partially Supports","Synthetic evidence needs review for SC 3.3.8."]},
+        {"sourceRowIndex":54,"cells":["4.1.2 Name, Role, Value","Supports","Synthetic evidence for SC 4.1.2."]},
+        {"sourceRowIndex":55,"cells":["4.1.3 Status Messages","Supports","Synthetic evidence for SC 4.1.3."]}
+      ],
+      "expectedClassification": "wcag",
+      "expectedReasonCode": "ELIGIBLE_WCAG_HEADERS"
+    },
+    {
+      "tableId": "table-section-508",
+      "sourceOrder": 2,
+      "headers": ["Revised Section 508 Provision", "Conformance", "Remarks"],
+      "rows": [{"sourceRowIndex":1,"cells":["502.2.1 User Control of Accessibility Features","Supports","Synthetic non-WCAG evidence."]}],
+      "expectedClassification": "non-wcag",
+      "expectedReasonCode": "SECTION_508_TABLE"
+    },
+    {
+      "tableId": "table-en-301-549",
+      "sourceOrder": 3,
+      "headers": ["EN 301 549 clause", "Conformance", "Remarks"],
+      "rows": [{"sourceRowIndex":1,"cells":["9.1 Web content","Supports","Synthetic non-WCAG evidence."]}],
+      "expectedClassification": "non-wcag",
+      "expectedReasonCode": "EN_301_549_TABLE"
+    },
+    {
+      "tableId": "table-arbitrary-number",
+      "sourceOrder": 4,
+      "headers": ["Item", "Status"],
+      "rows": [{"sourceRowIndex":1,"cells":["1.1.1ish internal release item","Complete"]}],
+      "expectedClassification": "non-wcag",
+      "expectedReasonCode": "NON_WCAG_TABLE"
+    },
+    {
+      "tableId": "table-literal-safety",
+      "sourceOrder": 5,
+      "headers": ["Note", "Literal text"],
+      "rows": [{"sourceRowIndex":1,"cells":["Formula-like source text","=1+1"]}],
+      "expectedClassification": "non-wcag",
+      "expectedReasonCode": "NON_WCAG_TABLE"
+    }
+  ]
+}

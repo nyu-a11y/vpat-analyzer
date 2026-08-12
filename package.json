@@ -1,0 +1,26 @@
+{
+  "name": "nyu-vpat-analyzer",
+  "version": "0.0.0-stage0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:contracts": "node --test tests/contracts/*.test.mjs",
+    "proof:stage0": "npm run test:contracts && node scripts/stage0-ingestion-blocked.mjs",
+    "test:a11y": "node scripts/stage1-command-placeholder.mjs test:a11y",
+    "test:appscript": "node scripts/stage1-command-placeholder.mjs test:appscript",
+    "test:browser": "node scripts/stage1-command-placeholder.mjs test:browser",
+    "proof:stage1": "node scripts/stage1-command-placeholder.mjs proof:stage1",
+    "test": "npm run test:contracts"
+  },
+  "dependencies": {
+    "fflate": "0.8.2",
+    "pdfjs-dist": "4.10.38"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0",
+    "playwright-core": "1.51.1"
+  }
+}

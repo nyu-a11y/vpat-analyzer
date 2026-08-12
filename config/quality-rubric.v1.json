@@ -1,0 +1,176 @@
+{
+  "id": "vpat-report-quality-rubric",
+  "version": "1.0.0",
+  "requirementCount": 16,
+  "primaryIdPolicy": "Stable requirement IDs are primary. Numeric and source ReqID values are aliases only.",
+  "sourceAnomalies": [
+    {
+      "source": "broader-quality-rubric",
+      "field": "ReqID",
+      "observedBlankCount": 1,
+      "note": "One observed row has a blank ReqID. Its row association is not asserted here, and a blank value is never a runtime identifier."
+    }
+  ],
+  "requirements": [
+    {
+      "id": "qr-e12",
+      "ordinal": 1,
+      "aliases": ["1", "E-12"],
+      "title": "Standards/guidelines declared",
+      "type": "Essential",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "The report declares the accessibility standards or guidelines it addresses.",
+      "guidance": "Name the standards and versions whose conformance tables are included."
+    },
+    {
+      "id": "qr-e13",
+      "ordinal": 2,
+      "aliases": ["2", "E-13"],
+      "title": "Only tested standards listed",
+      "type": "Essential",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "The report does not present an untested standard as evaluated coverage.",
+      "guidance": "List a standard as covered only when the report contains the corresponding completed evaluation."
+    },
+    {
+      "id": "qr-e14",
+      "ordinal": 3,
+      "aliases": ["3", "E-14"],
+      "title": "At least one standard covered",
+      "type": "Essential",
+      "impact": {"weight": 5, "label": "Critical"},
+      "description": "The report provides coverage for at least one declared accessibility standard.",
+      "guidance": "Include a completed conformance table for at least one declared standard."
+    },
+    {
+      "id": "qr-e16",
+      "ordinal": 4,
+      "aliases": ["4", "E-16"],
+      "title": "Conformance Level terms defined",
+      "type": "Essential",
+      "impact": {"weight": 3, "label": "Moderate"},
+      "description": "The report defines the conformance terms used in its criterion results.",
+      "guidance": "Provide definitions for each conformance term used in the report."
+    },
+    {
+      "id": "qr-bp24",
+      "ordinal": 5,
+      "aliases": ["5", "BP-24"],
+      "title": "All criteria answered for level",
+      "type": "Best Practice",
+      "impact": {"weight": 5, "label": "Critical"},
+      "description": "Every criterion in each declared conformance level has an answer.",
+      "guidance": "Complete every applicable row for the declared WCAG version and levels, and explain any exclusions."
+    },
+    {
+      "id": "qr-e11",
+      "ordinal": 6,
+      "aliases": ["6", "E-11"],
+      "title": "Evaluation methods described",
+      "type": "Essential",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "The report describes how accessibility was evaluated.",
+      "guidance": "Summarize the evaluation methods used to produce the report."
+    },
+    {
+      "id": "qr-bp09",
+      "ordinal": 7,
+      "aliases": ["7", "BP-09"],
+      "title": "AT testing described",
+      "type": "Best Practice",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "The report describes any assistive-technology testing represented in its findings.",
+      "guidance": "Identify the assistive technologies and relevant test context, or clearly state the testing boundary."
+    },
+    {
+      "id": "qr-bp10",
+      "ordinal": 8,
+      "aliases": ["8", "BP-10"],
+      "title": "Manual testing described",
+      "type": "Best Practice",
+      "impact": {"weight": 3, "label": "Moderate"},
+      "description": "The report describes the manual evaluation represented in its findings.",
+      "guidance": "Identify the manual methods and relevant test context, or clearly state the testing boundary."
+    },
+    {
+      "id": "qr-bp11",
+      "ordinal": 9,
+      "aliases": ["9", "BP-11"],
+      "title": "Automated tools described",
+      "type": "Best Practice",
+      "impact": {"weight": 3, "label": "Moderate"},
+      "description": "The report describes the automated tools represented in its findings.",
+      "guidance": "Identify automated tools and relevant versions or clearly state that none were used."
+    },
+    {
+      "id": "qr-e09",
+      "ordinal": 10,
+      "aliases": ["10", "E-09"],
+      "title": "Contact info provided",
+      "type": "Essential",
+      "impact": {"weight": 3, "label": "Moderate"},
+      "description": "The report provides a way to contact the reporting organization about accessibility information.",
+      "guidance": "Provide a maintained accessibility contact method."
+    },
+    {
+      "id": "qr-bp07",
+      "ordinal": 11,
+      "aliases": ["11", "BP-07"],
+      "title": "Tester product familiarity statement",
+      "type": "Best Practice",
+      "impact": {"weight": 2, "label": "Minor"},
+      "description": "The report states the testers' familiarity with the evaluated product.",
+      "guidance": "Describe the testers' product familiarity or relevant evaluation context."
+    },
+    {
+      "id": "qr-e08",
+      "ordinal": 12,
+      "aliases": ["12", "E-08"],
+      "title": "Product description provided",
+      "type": "Essential",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "The report identifies and describes the product being evaluated.",
+      "guidance": "Provide enough product and version context to identify the subject of the report."
+    },
+    {
+      "id": "qr-bp04",
+      "ordinal": 13,
+      "aliases": ["13", "BP-04"],
+      "title": "Notes state scope/coverage",
+      "type": "Best Practice",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "Report notes explain the evaluation scope and coverage boundary.",
+      "guidance": "State included product areas, versions, platforms, and material exclusions."
+    },
+    {
+      "id": "qr-e19",
+      "ordinal": 14,
+      "aliases": ["14", "E-19"],
+      "title": "Remarks filled for all criteria",
+      "type": "Essential",
+      "impact": {"weight": 5, "label": "Critical"},
+      "description": "Every criterion row includes remarks or explanatory evidence.",
+      "guidance": "Add criterion-specific remarks that support each conformance statement."
+    },
+    {
+      "id": "qr-e04",
+      "ordinal": 15,
+      "aliases": ["15", "E-04"],
+      "title": "Template version listed",
+      "type": "Essential",
+      "impact": {"weight": 3, "label": "Moderate"},
+      "description": "The report identifies the VPAT template version used.",
+      "guidance": "State the template version explicitly; V1 accepts VPAT 2.5 only."
+    },
+    {
+      "id": "qr-e06",
+      "ordinal": 16,
+      "aliases": ["16", "E-06"],
+      "title": "Report date present",
+      "type": "Essential",
+      "impact": {"weight": 4, "label": "Serious"},
+      "description": "The report includes its publication or completion date.",
+      "guidance": "Provide a clear report date so readers can judge the currency of the findings."
+    }
+  ]
+}

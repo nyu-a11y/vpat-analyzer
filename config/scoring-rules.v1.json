@@ -1,0 +1,32 @@
+{
+  "id": "vpat-report-quality-scoring",
+  "version": "1.0.0",
+  "rubricVersion": "1.0.0",
+  "requiredRequirementCount": 16,
+  "totalPossibleWeight": 60,
+  "confidenceThreshold": 70,
+  "calculation": {
+    "weightField": "impact.weight",
+    "completedResultMultipliers": {
+      "Pass": 1,
+      "Fail": 0
+    },
+    "percentageFormula": "round((earnedWeight / possibleWeight) * 100)",
+    "rounding": "nearest-integer-half-up"
+  },
+  "completionSemantics": {
+    "qualityResultsAllowedOnlyWhenComplete": ["Pass", "Fail"],
+    "operationalStatuses": ["Incomplete", "Error"],
+    "gradeRequiresAllRequiredFindingsComplete": true,
+    "incompleteGrade": null,
+    "rule": "Missing findings and ingestion, provider, malformed-response, or export errors are Incomplete or Error. They never count as Fail and never receive an F or another letter grade."
+  },
+  "bands": [
+    {"grade": "F", "min": 0, "max": 60},
+    {"grade": "D", "min": 61, "max": 69},
+    {"grade": "C", "min": 70, "max": 79},
+    {"grade": "B", "min": 80, "max": 89},
+    {"grade": "A-", "min": 90, "max": 94},
+    {"grade": "A", "min": 95, "max": 100}
+  ]
+}

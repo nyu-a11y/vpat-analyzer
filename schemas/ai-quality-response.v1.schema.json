@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nyu.edu/vpat-analyzer/schemas/ai-quality-response.v1.schema.json",
+  "title": "VPAT Analyzer quality response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "task", "requestId", "rubricVersion", "promptVersion", "findings"],
+  "properties": {
+    "schemaVersion": {"const": "1.0.0"},
+    "task": {"const": "quality-analysis"},
+    "requestId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "rubricVersion": {"const": "1.0.0"},
+    "promptVersion": {"const": "1.0.0"},
+    "findings": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/completeFinding"},
+          {"$ref": "#/$defs/incompleteFinding"}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "completeFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirementId", "status", "result", "evidence", "guidance", "confidence", "reviewRequired"],
+      "properties": {
+        "requirementId": {"enum": ["qr-e12", "qr-e13", "qr-e14", "qr-e16", "qr-bp24", "qr-e11", "qr-bp09", "qr-bp10", "qr-bp11", "qr-e09", "qr-bp07", "qr-e08", "qr-bp04", "qr-e19", "qr-e04", "qr-e06"]},
+        "status": {"const": "Complete"},
+        "result": {"enum": ["Pass", "Fail"]},
+        "evidence": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "guidance": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+        "reviewRequired": {"type": "boolean"}
+      }
+    },
+    "incompleteFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirementId", "status", "result", "evidence", "guidance", "confidence", "reviewRequired", "incompleteReason"],
+      "properties": {
+        "requirementId": {"enum": ["qr-e12", "qr-e13", "qr-e14", "qr-e16", "qr-bp24", "qr-e11", "qr-bp09", "qr-bp10", "qr-bp11", "qr-e09", "qr-bp07", "qr-e08", "qr-bp04", "qr-e19", "qr-e04", "qr-e06"]},
+        "status": {"const": "Incomplete"},
+        "result": {"const": "Incomplete"},
+        "evidence": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "guidance": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "confidence": {"type": "null"},
+        "reviewRequired": {"const": true},
+        "incompleteReason": {
+          "enum": ["MISSING_INPUT_EVIDENCE", "CONTRADICTORY_INPUT_EVIDENCE", "TRUNCATED_INPUT_EVIDENCE"]
+        }
+      }
+    }
+  }
+}
