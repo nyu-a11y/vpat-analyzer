@@ -1,0 +1,2 @@
+const STAGE0_HARNESS_CONFIG_ = /*__HARNESS_CONFIG__*/;
+

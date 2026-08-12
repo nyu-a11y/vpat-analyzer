@@ -9,11 +9,13 @@ node_modules/
 **/.DS_Store
 
 # Generated proof, browser, coverage, and render evidence
+build/
 coverage/
 output/
 artifacts/
 test-results/
 playwright-report/
+.playwright-cli/
 tmp/
 .tmp/
 *.trace.zip

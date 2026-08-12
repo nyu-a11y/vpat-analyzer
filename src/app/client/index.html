@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>NYU VPAT Analyzer</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-workbench">Skip to workbench</a>
+    <div class="sr-only" id="polite-status" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="sr-only" id="error-status" role="alert" aria-live="assertive" aria-atomic="true"></div>
+    <div class="sr-only" id="completion-status" role="status" aria-live="assertive" aria-atomic="true"></div>
+    <div class="page-shell">
+      <div id="app-root"></div>
+    </div>
+    <script type="module" src="./main.mjs"></script>
+  </body>
+</html>

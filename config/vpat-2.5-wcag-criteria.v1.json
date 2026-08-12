@@ -7,7 +7,7 @@
   "levels": ["A", "AA", "AAA"],
   "primaryIdPolicy": "The immutable id is primary. SC numbers and labels are aliases only.",
   "matchPolicy": {
-    "allowedAliasForms": ["exact SC number", "exact SC number plus official title"],
+    "allowedAliasForms": ["exact SC number", "exact SC number plus official title", "exact SC number plus official title plus the criterion-derived VPAT 2.5Rev Level/version suffix", "an exact official label followed by a fully anchored finite VPAT 2.5Rev cross-standard mapping grammar; mapping text is retained literally and never used as criterion identity"],
     "normalization": ["Unicode NFKC", "trim", "collapse ASCII whitespace", "case-fold official title"],
     "forbidden": ["leading-number match", "substring criterion match", "AI-guessed match", "Section 508 row", "EN 301 549 row"],
     "ambiguousResult": "reject"

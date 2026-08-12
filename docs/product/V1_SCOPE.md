@@ -4,7 +4,7 @@
 
 VPAT Analyzer V1 is an NYU-internal Google Apps Script web app. A person with an NYU account and the application URL chooses one VPAT 2.5 file from Google Drive. The app analyzes only WCAG conformance tables and creates one new private Google Sheet in `My Drive/VPAT Analyzer Results`.
 
-The deployed Apps Script configuration is intended to use `DOMAIN` access and execute as the accessing user. Those settings, user identity, Drive access, parsing, Sheets writes, and deployment behavior are requirements, not Stage 0 proof claims.
+The generated Apps Script configuration uses `DOMAIN` access and executes as the accessing user. User identity, live Drive access, provider routing, native Sheets writes, and deployment behavior remain owner-run acceptance evidence until exercised in the authorized Google environment.
 
 ## Accepted input
 
@@ -29,6 +29,8 @@ V1 has no OCR, local upload, batch processing, history dashboard, tenancy, roles
 
 Production analysis is intended to route through Portkey to Gemini. Direct Gemini is reserved for a future, explicitly opted-in local contract test using sanitized synthetic content. Deterministic tests make no provider call and have no production fallback.
 
-## Release gates
+## Build and release status
 
-Stage 0 remains blocked on deterministic ingestion proof documented in `docs/testing/STAGE_0_INGESTION_GATE.md`. The owner approved the optimized Document Workbench direction on 2026-08-12, so `selectedDirection` is `Document Workbench` with status `approved`. That decision clears the visual-selection gate only; production implementation remains outside the authority of the approval task and Stage 1 remains unavailable while the ingestion gate is blocked.
+The owner approved the optimized Document Workbench direction on 2026-08-12 and subsequently authorized the bounded local production build. The modular V1 source, production Apps Script package, synthetic preview, and local deterministic/browser proof now live in this repository. `selectedDirection` remains `Document Workbench` with status `approved`.
+
+The separate Stage 0 document still labels the authorized deployed HtmlService/`DocumentApp` boundary as owner-retained and unverified. That missing live evidence does not make the local implementation command a placeholder; it does prevent claiming that a production deployment or live provider/Sheets path has been verified by this build task.

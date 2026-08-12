@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://script.google.com https://script.googleusercontent.com https://*.googleusercontent.com https://www.gstatic.com; style-src 'unsafe-inline' https://ssl.gstatic.com; img-src data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://*.googleusercontent.com; worker-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'">
+    <title>Stage 0 synthetic ingestion proof</title>
+    <style>
+      :root { font-family: Arial, sans-serif; color: #1f2937; background: #f7f5f9; }
+      body { max-width: 72rem; margin: auto; padding: 2rem; }
+      h1 { color: #57068c; }
+      button { min-height: 44px; padding: .65rem 1rem; border: 0; border-radius: .4rem; background: #57068c; color: white; font: inherit; font-weight: 700; }
+      button:focus-visible { outline: 3px solid #f5c400; outline-offset: 3px; }
+      table { width: 100%; margin-top: 1.5rem; border-collapse: collapse; background: white; }
+      th, td { padding: .7rem; border: 1px solid #d1d5db; text-align: left; }
+      th { color: white; background: #57068c; }
+      .pass { color: #12613a; font-weight: 700; }
+      .fail { color: #a60000; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Stage 0 synthetic ingestion proof</h1>
+      <p>This isolated harness reads allowlisted private synthetic fixtures only. It does not analyze production documents or call an AI provider.</p>
+      <button id="run" type="button">Run authorized synthetic proof</button>
+      <p id="status" role="status" aria-live="polite">Ready.</p>
+      <table aria-label="Authorized synthetic fixture results"><thead><tr><th scope="col">Case</th><th scope="col">Observed</th><th scope="col">Result</th></tr></thead><tbody id="results"></tbody></table>
+    </main>
+    <script>/*__NETWORK_GUARD_BUNDLE__*/</script>
+    <script>
+      const STAGE0_CSP_VIOLATIONS = [];
+      document.addEventListener('securitypolicyviolation', event => STAGE0_CSP_VIOLATIONS.push({ effectiveDirective: event.effectiveDirective, disposition: event.disposition }));
+      const stage0DirectNetworkAllowed = (rawUrl, api) => {
+        try {
+          const url = new URL(rawUrl, location.href);
+          return url.origin === location.origin && /\/(?:macros|userCodeAppPanel)(?:\/|$)/.test(url.pathname) && ['fetch', 'XMLHttpRequest'].includes(api);
+        } catch { return false; }
+      };
+      const STAGE0_NETWORK_GUARD = Stage0NetworkGuard.installEarlyNetworkGuard({ allowedUrl: stage0DirectNetworkAllowed });
+    </script>
+    <script>/*__INGESTION_BUNDLE__*/</script>
+    <script>
+      const STAGE0_CONFIG = /*__HARNESS_CONFIG__*/;
+      const rpc = (name, ...args) => new Promise((resolve, reject) => google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[name](...args));
+      const hex = bytes => [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+      const digest = async bytes => hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)));
+      const decode = value => Uint8Array.from(atob(value), character => character.charCodeAt(0));
+      const utf8Length = value => new TextEncoder().encode(value).byteLength;
+      const same = (left, right) => VpatIngestion.stableStringify(left) === VpatIngestion.stableStringify(right);
+      const append = (name, observed, pass) => { const row = document.createElement('tr'); [name, observed].forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); }); const outcome = document.createElement('td'); outcome.className = pass ? 'pass' : 'fail'; outcome.textContent = pass ? 'Pass' : 'Fail'; row.append(outcome); document.querySelector('#results').append(row); };
+
+      function sampleMemory(samples) {
+        const value = performance.memory?.usedJSHeapSize;
+        if (Number.isFinite(value) && value >= 0) samples.push(value);
+      }
+
+      async function observedRun(task, maxObservedDurationMs, memorySamples) {
+        sampleMemory(memorySamples);
+        const started = performance.now();
+        const value = await task();
+        const elapsedMs = Math.round((performance.now() - started) * 100) / 100;
+        sampleMemory(memorySamples);
+        return { value, elapsedMs, withinObservedDeadline: elapsedMs <= maxObservedDurationMs };
+      }
+
+      async function acquire(item) {
+        const descriptor = await rpc('beginFixture', item.caseKey);
+        if (descriptor.status === 'rejected') return { descriptor, bytes: null, chunkCount: 0, batchCount: 0 };
+        const descriptorMatches = descriptor.schemaVersion === '1.0.0' && descriptor.status === 'complete' && descriptor.caseKey === item.caseKey && descriptor.sourceType === item.sourceType && descriptor.mimeType === item.mimeType && descriptor.byteLength === item.expectedBytes && descriptor.chunkBytes === STAGE0_CONFIG.transport.chunkBytes && descriptor.chunkCount === item.expectedChunkCount && descriptor.sha256 === item.expectedSha256 && descriptor.buildId === STAGE0_CONFIG.build.id;
+        if (!descriptorMatches) throw new Error('Synthetic transport descriptor does not match the committed binding.');
+        const bytes = new Uint8Array(descriptor.byteLength); let offset = 0; let batchCount = 0;
+        for (let start = 0; start < descriptor.chunkCount; start += STAGE0_CONFIG.transport.chunkBatchSize) {
+          const batch = await rpc('readFixtureChunkBatch', item.caseKey, start, STAGE0_CONFIG.transport.chunkBatchSize);
+          batchCount += 1;
+          const expectedBatchLength = Math.min(STAGE0_CONFIG.transport.chunkBatchSize, descriptor.chunkCount - start);
+          if (batch?.schemaVersion !== '1.0.0' || batch.caseKey !== item.caseKey || batch.chunkCount !== descriptor.chunkCount || batch.startChunkIndex !== start || batch.chunks?.length !== expectedBatchLength) throw new Error('Synthetic transport chunk batch is inconsistent.');
+          for (let batchIndex = 0; batchIndex < batch.chunks.length; batchIndex += 1) {
+            const index = start + batchIndex;
+            const chunk = batch.chunks[batchIndex];
+            const decoded = decode(chunk.base64);
+            const expectedLength = Math.min(descriptor.chunkBytes, descriptor.byteLength - offset);
+            const chunkMatches = chunk.chunkIndex === index && chunk.byteLength === expectedLength && decoded.byteLength === expectedLength && await digest(decoded) === chunk.sha256;
+            if (!chunkMatches) throw new Error('Synthetic transport chunk integrity check failed.');
+            bytes.set(decoded, offset); offset += decoded.length;
+          }
+        }
+        if (offset !== descriptor.byteLength || await digest(bytes) !== descriptor.sha256) throw new Error('Synthetic whole-file integrity check failed.');
+        return { descriptor, bytes, chunkCount: descriptor.chunkCount, batchCount };
+      }
+
+      async function verifyRoundTrip(result) {
+        const canonicalResult = JSON.parse(VpatIngestion.stableStringify(result));
+        const serialized = JSON.stringify(canonicalResult);
+        const echoed = await rpc('echoIngestionResult', canonicalResult);
+        return echoed?.schemaVersion === '1.0.0' && echoed.utf8Bytes === utf8Length(serialized) && echoed.sha256 === await VpatIngestion.sha256Text(serialized) && VpatIngestion.stableStringify(echoed.result) === VpatIngestion.stableStringify(canonicalResult);
+      }
+
+      async function run() {
+        const button = document.querySelector('#run'); const status = document.querySelector('#status');
+        button.disabled = true; document.querySelector('#results').replaceChildren(); status.textContent = 'Running authorized synthetic proof…';
+        const evidence = []; const memorySamples = []; let executionIdentity = null; let passed = 0; let total = 0;
+        const heapTimer = setInterval(() => sampleMemory(memorySamples), STAGE0_CONFIG.memory.sampleIntervalMs);
+        const assert = (name, observed, pass) => { total += 1; if (pass) passed += 1; append(name, observed, pass); };
+        try {
+          const manifest = await rpc('getHarnessManifest');
+          const buildPass = manifest?.schemaVersion === '1.0.0' && manifest.syntheticOnly === true && same(manifest.build, STAGE0_CONFIG.build) && same(manifest.transport, STAGE0_CONFIG.transport) && same(manifest.memory, STAGE0_CONFIG.memory) && same(manifest.fixtureCases, STAGE0_CONFIG.fixtureCases) && same(manifest.googleDocCase, STAGE0_CONFIG.googleDocCase) && same(manifest.googleDocOverflowCase, STAGE0_CONFIG.googleDocOverflowCase);
+          assert('deployed-build-and-fixture-binding', STAGE0_CONFIG.build.id.slice(0, 12), buildPass);
+          const identityBoundary = await rpc('verifyStage0ExecutionIdentityBoundary');
+          const identityPass = identityBoundary?.schemaVersion === '1.0.0' && identityBoundary.boundarySatisfied === true && identityBoundary.accessibleCount === identityBoundary.expectedAccessibleCount && identityBoundary.inaccessibleCount === 1;
+          executionIdentity = { mode: 'two-account-access-differential', expectedAccessibleCount: identityBoundary?.expectedAccessibleCount ?? 0, accessibleCount: identityBoundary?.accessibleCount ?? 0, inaccessibleCount: identityBoundary?.inaccessibleCount ?? 0, boundarySatisfied: identityPass };
+          assert('user-accessing-execution-boundary', `${identityBoundary?.accessibleCount || 0} accessible · ${identityBoundary?.inaccessibleCount || 0} inaccessible`, identityPass);
+
+          for (const item of manifest.fixtureCases) {
+            const observed = await observedRun(async () => {
+              const acquired = await acquire(item);
+              const result = acquired.descriptor.status === 'rejected'
+                ? acquired.descriptor
+                : await VpatIngestion.ingestBinarySource({ requestId: `live-${item.caseKey}`, bytes: acquired.bytes, mimeType: acquired.descriptor.mimeType, limits: item.parserLimits, declaredWcagVersions: item.declaredWcagVersions ?? undefined, declaredLevels: item.declaredLevels ?? undefined });
+              const contract = VpatIngestion.validateIngestionResult(result, { requestId: `live-${item.caseKey}`, sourceType: item.sourceType });
+              const roundTrip = contract.valid && await verifyRoundTrip(result);
+              const projectionSha256 = result.status === 'complete' ? await VpatIngestion.positiveProjectionDigest(result) : null;
+              const matched = contract.valid && roundTrip && result.status === item.expectedStatus && (result.status === 'complete' ? projectionSha256 === item.expectedProjectionSha256 : result.rejection.code === item.expectedCode);
+              return { result, matched, projectionSha256, chunkCount: acquired.chunkCount, batchCount: acquired.batchCount };
+            }, item.maxObservedDurationMs, memorySamples);
+            const casePass = observed.value.matched && observed.withinObservedDeadline;
+            const result = observed.value.result;
+            evidence.push({ caseKey: item.caseKey, expectedStatus: item.expectedStatus, expectedCode: item.expectedCode, observedStatus: result.status, observedCode: result.status === 'rejected' ? result.rejection.code : null, fixtureSha256: item.expectedSha256, byteLength: item.expectedBytes, chunkCount: observed.value.chunkCount, batchCount: observed.value.batchCount, projectionSha256: observed.value.projectionSha256, elapsedMs: observed.elapsedMs, maxObservedDurationMs: item.maxObservedDurationMs, withinObservedDeadline: observed.withinObservedDeadline, passed: casePass });
+            assert(item.caseKey, result.status === 'complete' ? `${result.rows.length} rows · ${observed.value.chunkCount} chunks` : `${result.rejection.code} · ${observed.value.chunkCount} chunks`, casePass);
+          }
+
+          const googleItem = manifest.googleDocCase;
+          const googleObserved = await observedRun(async () => {
+            const candidateDocument = await rpc('serializeGoogleDocCase');
+            const result = candidateDocument?.status === 'rejected'
+              ? candidateDocument
+              : VpatIngestion.ingestSerializedGoogleDoc({ requestId: 'live-google-doc-primary', candidateDocument });
+            const contract = VpatIngestion.validateIngestionResult(result, { requestId: 'live-google-doc-primary', sourceType: 'google-doc' });
+            const projectionSha256 = result.status === 'complete' ? await VpatIngestion.positiveProjectionDigest(result) : null;
+            const roundTrip = contract.valid && await verifyRoundTrip(result);
+            return { result, projectionSha256, matched: contract.valid && roundTrip && result.status === 'complete' && projectionSha256 === googleItem.expectedProjectionSha256 };
+          }, googleItem.maxObservedDurationMs, memorySamples);
+          const googlePass = googleObserved.value.matched && googleObserved.withinObservedDeadline;
+          evidence.push({ caseKey: googleItem.caseKey, expectedStatus: 'complete', expectedCode: null, observedStatus: googleObserved.value.result.status, observedCode: googleObserved.value.result.status === 'rejected' ? googleObserved.value.result.rejection.code : null, fixtureSha256: null, byteLength: null, chunkCount: 0, batchCount: 0, projectionSha256: googleObserved.value.projectionSha256, elapsedMs: googleObserved.elapsedMs, maxObservedDurationMs: googleItem.maxObservedDurationMs, withinObservedDeadline: googleObserved.withinObservedDeadline, passed: googlePass });
+          assert(googleItem.caseKey, googleObserved.value.result.status === 'complete' ? `${googleObserved.value.result.rows.length} rows` : googleObserved.value.result.rejection.code, googlePass);
+
+          const googleOverflowItem = manifest.googleDocOverflowCase;
+          const googleOverflowObserved = await observedRun(async () => {
+            const result = await rpc('serializeGoogleDocOverflowCase');
+            const contract = VpatIngestion.validateIngestionResult(result, { requestId: 'live-google-doc-overflow', sourceType: 'google-doc' });
+            const roundTrip = contract.valid && await verifyRoundTrip(result);
+            return { result, matched: contract.valid && roundTrip && result.status === googleOverflowItem.expectedStatus && result.rejection.code === googleOverflowItem.expectedCode };
+          }, googleOverflowItem.maxObservedDurationMs, memorySamples);
+          const googleOverflowPass = googleOverflowObserved.value.matched && googleOverflowObserved.withinObservedDeadline;
+          evidence.push({ caseKey: googleOverflowItem.caseKey, expectedStatus: googleOverflowItem.expectedStatus, expectedCode: googleOverflowItem.expectedCode, observedStatus: googleOverflowObserved.value.result.status, observedCode: googleOverflowObserved.value.result.status === 'rejected' ? googleOverflowObserved.value.result.rejection.code : null, fixtureSha256: null, byteLength: null, chunkCount: 0, batchCount: 0, projectionSha256: null, elapsedMs: googleOverflowObserved.elapsedMs, maxObservedDurationMs: googleOverflowItem.maxObservedDurationMs, withinObservedDeadline: googleOverflowObserved.withinObservedDeadline, passed: googleOverflowPass });
+          assert(googleOverflowItem.caseKey, googleOverflowObserved.value.result.status === 'rejected' ? googleOverflowObserved.value.result.rejection.code : googleOverflowObserved.value.result.status, googleOverflowPass);
+
+          const multiChunkCases = evidence.filter(item => item.chunkCount > 1).map(item => item.caseKey);
+          const multiBatchCases = evidence.filter(item => item.batchCount > 1).map(item => item.caseKey);
+          const totalBatchCount = evidence.reduce((sum, item) => sum + (item.batchCount || 0), 0);
+          assert('batched-multi-chunk-Drive-transport', `${multiChunkCases.length} multi-chunk · ${multiBatchCases.length} multi-batch`, multiChunkCases.includes('primary-docx') && multiChunkCases.length >= 2 && multiBatchCases.includes('resource-limit-docx'));
+
+          sampleMemory(memorySamples);
+          const memorySupported = memorySamples.length >= 2;
+          const memoryBefore = memorySamples[0] ?? null;
+          const memoryPeak = memorySupported ? Math.max(...memorySamples) : null;
+          const memoryAfter = memorySamples.at(-1) ?? null;
+          const memoryGrowth = memorySupported ? Math.max(0, memoryPeak - memoryBefore) : null;
+          const memoryPass = memorySupported && memoryPeak <= STAGE0_CONFIG.memory.maxSampledPeakBytes && memoryGrowth <= STAGE0_CONFIG.memory.maxSampledGrowthBytes;
+          assert('sampled-browser-memory-policy', memorySupported ? `${Math.round(memoryPeak / 1048576)} MiB sampled peak` : 'unsupported', memoryPass);
+
+          const unexpected = STAGE0_NETWORK_GUARD.unexpectedEntries();
+          const networkCapabilities = STAGE0_NETWORK_GUARD.capabilities();
+          const capabilityPass = networkCapabilities.every(item => !item.available || item.installed);
+          assert('direct-network-and-worker-guard', `${unexpected.length} blocked attempt(s)`, unexpected.length === 0 && capabilityPass);
+          assert('runtime-CSP-violation-log', `${STAGE0_CSP_VIOLATIONS.length} violation(s)`, STAGE0_CSP_VIOLATIONS.length === 0);
+
+          status.textContent = `${passed} of ${total} authorized assertions passed.`;
+          globalThis.__STAGE0_LIVE_PROOF__ = {
+            schemaVersion: '1.0.0', status: passed === total ? 'passed' : 'failed', passed, total,
+            build: STAGE0_CONFIG.build, executionIdentity, cases: evidence, runtime: VpatIngestion.runtime,
+            transport: { ...STAGE0_CONFIG.transport, batchCount: totalBatchCount, multiChunkCaseCount: multiChunkCases.length, multiBatchCaseCount: multiBatchCases.length },
+            deadline: { mode: 'observed-non-preemptive', allWithinObservedLimit: evidence.every(item => item.withinObservedDeadline) },
+            memory: { supported: memorySupported, measurement: STAGE0_CONFIG.memory.measurement, sampleCount: memorySamples.length, beforeBytes: memoryBefore, sampledPeakBytes: memoryPeak, afterBytes: memoryAfter, sampledGrowthBytes: memoryGrowth, limitPeakBytes: STAGE0_CONFIG.memory.maxSampledPeakBytes, limitGrowthBytes: STAGE0_CONFIG.memory.maxSampledGrowthBytes, withinLimit: memoryPass },
+            networkCapabilities, networkLedger: STAGE0_NETWORK_GUARD.sanitizedEntries(), cspViolationCount: STAGE0_CSP_VIOLATIONS.length,
+          };
+        } catch (error) {
+          status.textContent = 'The authorized proof failed safely.';
+          globalThis.__STAGE0_LIVE_PROOF__ = { schemaVersion: '1.0.0', status: 'failed', passed, total, safeErrorCode: 'HARNESS_EXCEPTION', build: STAGE0_CONFIG.build, executionIdentity, cases: evidence, runtime: VpatIngestion.runtime, transport: null, deadline: null, memory: null, networkCapabilities: STAGE0_NETWORK_GUARD.capabilities(), networkLedger: STAGE0_NETWORK_GUARD.sanitizedEntries(), cspViolationCount: STAGE0_CSP_VIOLATIONS.length };
+        } finally { clearInterval(heapTimer); button.disabled = false; }
+      }
+      document.querySelector('#run').addEventListener('click', run);
+    </script>
+  </body>
+</html>

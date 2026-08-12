@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; worker-src 'none'; font-src 'none'">
+    <title>Stage 0 local ingestion proof</title>
+    <style>
+      :root { color-scheme: light; font-family: Arial, sans-serif; color: #1f2937; background: #f7f5f9; }
+      body { max-width: 70rem; margin: 0 auto; padding: 2rem; }
+      h1 { color: #57068c; font-size: 1.7rem; }
+      button { min-height: 44px; border: 0; border-radius: .4rem; padding: .65rem 1rem; color: white; background: #57068c; font: inherit; font-weight: 700; }
+      button:focus-visible { outline: 3px solid #f5c400; outline-offset: 3px; }
+      table { width: 100%; margin-top: 1.5rem; border-collapse: collapse; background: white; }
+      th, td { padding: .7rem; border: 1px solid #d1d5db; text-align: left; vertical-align: top; }
+      th { color: white; background: #57068c; }
+      .pass { color: #12613a; font-weight: 700; }
+      .fail { color: #a60000; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Stage 0 local ingestion proof</h1>
+      <p>This adjunct runs the production-shaped inline bundle against committed synthetic bytes. It does not clear the live HtmlService gate.</p>
+      <button id="run" type="button">Run local parser proof</button>
+      <p id="status" role="status" aria-live="polite">Ready.</p>
+      <table aria-label="Synthetic fixture results"><thead><tr><th scope="col">Case</th><th scope="col">Expected</th><th scope="col">Observed</th><th scope="col">Result</th></tr></thead><tbody id="results"></tbody></table>
+    </main>
+    <script>/*__NETWORK_GUARD_BUNDLE__*/</script>
+    <script>
+      const STAGE0_CSP_VIOLATIONS = [];
+      document.addEventListener('securitypolicyviolation', event => STAGE0_CSP_VIOLATIONS.push({ effectiveDirective: event.effectiveDirective, disposition: event.disposition }));
+      const STAGE0_NETWORK_GUARD = Stage0NetworkGuard.installEarlyNetworkGuard();
+    </script>
+    <script>/*__INGESTION_BUNDLE__*/</script>
+    <script>
+      const STAGE0_CONFIG = /*__HARNESS_CONFIG__*/;
+      const CASES = /*__LOCAL_CASES__*/;
+      const decode = value => Uint8Array.from(atob(value), character => character.charCodeAt(0));
+      const expectedText = item => item.expectedStatus === 'complete' ? 'complete · exact golden digest' : `rejected · ${item.expectedCode}`;
+      const observedText = result => result.status === 'complete' ? `complete · ${result.rows.length} rows` : `rejected · ${result.rejection.code}`;
+      const append = (item, result, pass) => { const row = document.createElement('tr'); for (const text of [item.caseKey, expectedText(item), observedText(result)]) { const cell = document.createElement('td'); cell.textContent = text; row.append(cell); } const cell = document.createElement('td'); cell.className = pass ? 'pass' : 'fail'; cell.textContent = pass ? 'Pass' : 'Fail'; row.append(cell); document.querySelector('#results').append(row); };
+      const sampleMemory = samples => { const value = performance.memory?.usedJSHeapSize; if (Number.isFinite(value) && value >= 0) samples.push(value); };
+
+      async function run() {
+        const button = document.querySelector('#run'); const status = document.querySelector('#status');
+        button.disabled = true; document.querySelector('#results').replaceChildren(); status.textContent = 'Running synthetic cases…';
+        const evidence = []; const memorySamples = []; let passed = 0; let total = 0;
+        const heapTimer = setInterval(() => sampleMemory(memorySamples), STAGE0_CONFIG.memory.sampleIntervalMs);
+        try {
+          for (const item of CASES) {
+            total += 1; sampleMemory(memorySamples); const started = performance.now();
+            const bytes = decode(item.bytesBase64);
+            const sourceDigest = await crypto.subtle.digest('SHA-256', bytes);
+            const sourceSha256 = [...new Uint8Array(sourceDigest)].map(value => value.toString(16).padStart(2, '0')).join('');
+            const result = await VpatIngestion.ingestBinarySource({ requestId: `local-${item.caseKey}`, bytes, mimeType: item.mimeType, limits: item.parserLimits, declaredWcagVersions: item.declaredWcagVersions ?? undefined, declaredLevels: item.declaredLevels ?? undefined });
+            const elapsedMs = Math.round((performance.now() - started) * 100) / 100; sampleMemory(memorySamples);
+            const contract = VpatIngestion.validateIngestionResult(result, { requestId: `local-${item.caseKey}`, sourceType: item.sourceType });
+            const projectionSha256 = result.status === 'complete' ? await VpatIngestion.positiveProjectionDigest(result) : null;
+            const pass = sourceSha256 === item.expectedSha256 && bytes.byteLength === item.expectedBytes && contract.valid && result.status === item.expectedStatus && (result.status === 'complete' ? projectionSha256 === item.expectedProjectionSha256 : result.rejection.code === item.expectedCode) && elapsedMs <= item.maxObservedDurationMs;
+            if (pass) passed += 1; append(item, result, pass);
+            evidence.push({ caseKey: item.caseKey, expectedStatus: item.expectedStatus, expectedCode: item.expectedCode, observedStatus: result.status, observedCode: result.status === 'rejected' ? result.rejection.code : null, fixtureSha256: sourceSha256, byteLength: bytes.byteLength, projectionSha256, elapsedMs, maxObservedDurationMs: item.maxObservedDurationMs, withinObservedDeadline: elapsedMs <= item.maxObservedDurationMs, passed: pass });
+          }
+
+          sampleMemory(memorySamples);
+          const memorySupported = memorySamples.length >= 2;
+          const beforeBytes = memorySamples[0] ?? null;
+          const sampledPeakBytes = memorySupported ? Math.max(...memorySamples) : null;
+          const afterBytes = memorySamples.at(-1) ?? null;
+          const sampledGrowthBytes = memorySupported ? Math.max(0, sampledPeakBytes - beforeBytes) : null;
+          const memoryPass = memorySupported && sampledPeakBytes <= STAGE0_CONFIG.memory.maxSampledPeakBytes && sampledGrowthBytes <= STAGE0_CONFIG.memory.maxSampledGrowthBytes;
+          total += 1; if (memoryPass) passed += 1;
+          append({ caseKey: 'sampled-browser-memory', expectedStatus: 'complete' }, memoryPass ? { status: 'complete', rows: [] } : { status: 'rejected', rejection: { code: 'MEMORY_POLICY' } }, memoryPass);
+
+          const networkCapabilities = STAGE0_NETWORK_GUARD.capabilities();
+          const networkPass = STAGE0_NETWORK_GUARD.unexpectedEntries().length === 0 && networkCapabilities.every(item => !item.available || item.installed);
+          total += 1; if (networkPass) passed += 1;
+          append({ caseKey: 'unexpected-network-or-worker', expectedStatus: 'complete' }, networkPass ? { status: 'complete', rows: [] } : { status: 'rejected', rejection: { code: 'UNEXPECTED_NETWORK' } }, networkPass);
+          const cspPass = STAGE0_CSP_VIOLATIONS.length === 0;
+          total += 1; if (cspPass) passed += 1;
+          append({ caseKey: 'runtime-CSP-violations', expectedStatus: 'complete' }, cspPass ? { status: 'complete', rows: [] } : { status: 'rejected', rejection: { code: 'CSP_VIOLATION' } }, cspPass);
+
+          status.textContent = `${passed} of ${total} local assertions passed.`;
+          document.documentElement.dataset.proofStatus = passed === total ? 'passed' : 'failed';
+          globalThis.__STAGE0_LOCAL_PROOF__ = {
+            schemaVersion: '1.0.0', status: document.documentElement.dataset.proofStatus, passed, total,
+            build: STAGE0_CONFIG.build, cases: evidence, runtime: VpatIngestion.runtime,
+            deadline: { mode: 'observed-non-preemptive', allWithinObservedLimit: evidence.every(item => item.withinObservedDeadline) },
+            memory: { supported: memorySupported, measurement: STAGE0_CONFIG.memory.measurement, sampleCount: memorySamples.length, beforeBytes, sampledPeakBytes, afterBytes, sampledGrowthBytes, withinLimit: memoryPass },
+            networkCapabilities, networkLedger: STAGE0_NETWORK_GUARD.sanitizedEntries(), cspViolationCount: STAGE0_CSP_VIOLATIONS.length,
+          };
+        } catch (error) {
+          status.textContent = 'Local proof failed safely.'; document.documentElement.dataset.proofStatus = 'failed';
+          globalThis.__STAGE0_LOCAL_PROOF__ = { schemaVersion: '1.0.0', status: 'failed', passed, total, safeErrorCode: 'HARNESS_EXCEPTION', build: STAGE0_CONFIG.build, cases: evidence, networkCapabilities: STAGE0_NETWORK_GUARD.capabilities(), networkLedger: STAGE0_NETWORK_GUARD.sanitizedEntries(), cspViolationCount: STAGE0_CSP_VIOLATIONS.length };
+        } finally { clearInterval(heapTimer); button.disabled = false; }
+      }
+      document.querySelector('#run').addEventListener('click', run);
+    </script>
+  </body>
+</html>

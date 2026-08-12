@@ -2,9 +2,9 @@
 
 ## Evidence policy
 
-Committed automated tests use synthetic fixtures only and have no production fallback. Stage 0 contract checks may validate documents, configuration, prompts, schemas, invariants, and blocker sentinels. They must not claim to exercise unimplemented Apps Script, HtmlService, Drive, DOCX/PDF parsing, providers, Sheets, production UI, or deployment behavior.
+Committed automated tests use synthetic fixtures only and have no production fallback. Stage 0 contract, unit, integration, build, and local browser checks now exercise deterministic DOCX/PDF parsing and the isolated harness package. They must not claim to exercise unproven deployed Apps Script/HtmlService/Drive/`DocumentApp` boundaries, providers, Sheets, production UI, or production behavior.
 
-The P0 ingestion cases remain blocked as described in `STAGE_0_INGESTION_GATE.md`. The owner approved the optimized Document Workbench visual direction on 2026-08-12. Future Stage 1 commands must still exit unavailable rather than report placeholder success while the independent ingestion gate is blocked.
+The live Google ingestion cases remain owner-retained as described in `STAGE_0_INGESTION_GATE.md`. The owner approved the optimized Document Workbench visual direction and later authorized the local production build. Stage 1 commands now execute actual deterministic, Apps Script static/build, and browser evidence; they do not claim deployment, live provider, or native Sheets proof.
 
 ## Stage 0 executable contract cases
 
@@ -20,7 +20,7 @@ The P0 ingestion cases remain blocked as described in `STAGE_0_INGESTION_GATE.md
 | C-008 | Inspect workbook/export schema. | Exactly five tabs in order: Overview, Line-item Review, Quality Requirements, Scoring, Methodology & disclaimer. No extra tabs; provenance versions present. |
 | C-009 | Inspect prompts. | Separate versioned tasks, strict JSON-only response, untrusted-source delimiter, expected-ID coverage, no tools/OCR/table discovery/scoring/export authority, and no complete binary/image input. |
 | C-010 | Run Stage 0 blocker sentinel. | Exits with code 2, reports `BLOCKED`, and names missing real-format/HtmlService/DocumentApp/transport proof. It is intentionally not part of passing `npm test`. |
-| C-011 | Invoke future Stage 1 command sentinels. | Each exits with code 2 and states unavailable; none emits passing evidence. |
+| C-011 | Invoke Stage 1 build and proof commands. | They execute the real local implementation and synthetic browser proof; none substitutes for the owner-retained Google/provider/Sheets acceptance. |
 
 ## Blocked ingestion acceptance cases
 
@@ -28,7 +28,7 @@ These cases are required to unblock Stage 0, but no committed contract test may 
 
 | ID | Source/condition | Expected behavior and evidence |
 | --- | --- | --- |
-| I-001 | Actual synthetic Google Doc containing WCAG, non-WCAG, body prose, merged cells, and duplicate rows | Serialize through `DocumentApp`; retain eligible A/AA/AAA WCAG rows in source order; record duplicates; exclude prose and other tables; golden JSON parity through a JSON-only `google.script.run` round trip. |
+| I-001 | Actual synthetic Google Doc containing WCAG, non-WCAG, body prose, merged cells, and duplicate rows | Serialize through `DocumentApp`; retain its declared WCAG 2.2 A/AA rows in source order; record duplicates; exclude prose and other tables; golden JSON parity through a JSON-only `google.script.run` round trip. |
 | I-002 | Real synthetic DOCX package with the same logical fixture | Actual browser bundle parses OOXML under bound/deployed HtmlService constraints; golden row parity; no Drive conversion, OCR, provider, or network fetch. |
 | I-003 | Real synthetic searchable PDF with the same logical fixture | Actual browser PDF bundle reconstructs eligible rows within documented tolerances; golden parity; CSP/worker/memory behavior proven; no page images/provider/OCR. |
 | I-004 | Image-only/scanned PDF | Reject `PDF_NON_SEARCHABLE`; no OCR or image-to-provider fallback. |
@@ -38,6 +38,8 @@ These cases are required to unblock Stage 0, but no committed contract test may 
 | I-008 | Inaccessible Drive source | Reject `SOURCE_INACCESSIBLE`; do not alter sharing or expose permission details. |
 | I-009 | Large/decompression-hostile source | Enforce byte/page/ZIP/table/text/time bounds and reject `RESOURCE_LIMIT_EXCEEDED`; no unexpected network. |
 | I-010 | Drive-to-browser transport | Prove byte encoding/chunking/round-trip integrity and JSON-only `google.script.run` return values in the authorized HtmlService harness. |
+| I-011 | Full 87-criterion WCAG 2.0/2.1/2.2 A/AA/AAA DOCX and wrapped/multipage searchable PDF | Preserve every ordered immutable criterion ID and normalized literal criterion/conformance/remarks value exactly; retain retired 4.1.1; no duplicate, missing, or cross-format-corrupted evidence. |
+| I-012 | Actual synthetic Google Doc with a normalized 10,001-character prose paragraph | Serializer rejects `RESOURCE_LIMIT_EXCEEDED` before parsing and does not slice or return partial candidate-document content. |
 
 ## Future deterministic domain and AI cases
 
@@ -74,4 +76,4 @@ These cases are required to unblock Stage 0, but no committed contract test may 
 
 All visible states in `V1_FLOW_STATE_MATRIX.md` require deterministic render fixtures at 1440×900, 1024×768, 768×1024, 390×844, 320×568, and desktop at 200% zoom. Automated proof must find no unapproved axe violations and no serious/critical browser findings; controls must work by keyboard; focus and live-region changes must match the state contract; 44 px targets, forced colors, reduced motion, and reflow must pass; and there must be no clipping, page-level horizontal overflow, dead controls, console errors, placeholder copy, TODOs, or fake progress. Completed-state proof must also distinguish the exact three-view web navigator from the exact five-tab Sheet and verify reviewer jump/focus, row disclosures, review filters, methodology disclosure, print expansion/restoration, and unchanged exactly-once Sheet semantics.
 
-These cases remain future/unexecuted. Owner-only VoiceOver, keyboard operation, focus restoration, reading order, 200% zoom/reflow, native Sheets readability, and visual comparison remain unchecked and cannot be self-certified by the builder.
+The local Stage 1 browser proof executes the synthetic keyboard, focus, target-size, 200% zoom/reflow, forced-colors, reduced-motion, axe, print, stale-callback, recovery, and visual-comparison checks. VoiceOver, live Google authorization, provider quality, and native Sheets readability remain owner-run and cannot be self-certified by the builder.

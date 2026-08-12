@@ -80,6 +80,6 @@ V1 does not add a history dashboard or retained central application-record produ
 
 For each `requestId`, cardinality of final `ExportReceipt` is `0..1`. Export creation uses an idempotency check keyed by request ID plus an atomic or otherwise race-safe receipt-claim strategy appropriate to Apps Script. A timeout after a write is ambiguous until receipt reconciliation; it is never permission to create another spreadsheet blindly. One request may produce at most one final spreadsheet.
 
-## Stage 0 boundary
+## Implementation boundary
 
-This document is a contract, not an implemented state runtime. Future Stage 1 commands must report unavailable until the ingestion proof and visual-selection gates are satisfied; placeholder success is forbidden.
+The deterministic request runtime and the HtmlService client projection now implement this contract and are covered by local unit/browser proof. The Apps Script deployment persists the same stable request identity and stage cursor. Live reload/reconciliation, Google authorization, and native export behavior remain owner-run acceptance and must not be described as locally verified.

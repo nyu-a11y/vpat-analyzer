@@ -18,11 +18,30 @@
         "catalogVersion": {"const": "1.0.0"},
         "sourceType": {"enum": ["google-doc", "docx", "pdf"]},
         "status": {"const": "complete"},
-        "candidateTables": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/candidateTable"}},
+        "reportEvidence": {"$ref": "#/$defs/reportEvidence"},
+        "candidateTables": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/candidateTable"}},
         "rows": {"type": "array", "minItems": 1, "maxItems": 87, "items": {"$ref": "#/$defs/extractedRow"}},
-        "excludedRows": {"type": "array", "items": {"$ref": "#/$defs/excludedRow"}},
-        "duplicates": {"type": "array", "items": {"$ref": "#/$defs/duplicateGroup"}},
+        "excludedRows": {"type": "array", "maxItems": 5000, "items": {"$ref": "#/$defs/excludedRow"}},
+        "duplicates": {"type": "array", "maxItems": 87, "items": {"$ref": "#/$defs/duplicateGroup"}},
         "coverage": {"$ref": "#/$defs/coverage"}
+      }
+    },
+    "reportEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["templateVersion", "productDescription", "reportDate", "contactInformation", "evaluationMethods", "assistiveTechnologyTesting", "manualTesting", "automatedTesting", "testerFamiliarity", "conformanceDefinitions", "scopeNotes"],
+      "properties": {
+        "templateVersion": {"type": "string", "maxLength": 1000},
+        "productDescription": {"type": "string", "maxLength": 1000},
+        "reportDate": {"type": "string", "maxLength": 1000},
+        "contactInformation": {"type": "string", "maxLength": 1000},
+        "evaluationMethods": {"type": "string", "maxLength": 1000},
+        "assistiveTechnologyTesting": {"type": "string", "maxLength": 1000},
+        "manualTesting": {"type": "string", "maxLength": 1000},
+        "automatedTesting": {"type": "string", "maxLength": 1000},
+        "testerFamiliarity": {"type": "string", "maxLength": 1000},
+        "conformanceDefinitions": {"type": "string", "maxLength": 1000},
+        "scopeNotes": {"type": "string", "maxLength": 1000}
       }
     },
     "rejectedResult": {
@@ -80,11 +99,11 @@
     "duplicateGroup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["criterionId", "keptRowId", "duplicateRowIds"],
+      "required": ["criterionId", "keptRowId", "duplicateRows"],
       "properties": {
         "criterionId": {"type": "string", "pattern": "^wcag-sc-[1-4]\\.[1-9][0-9]*\\.[1-9][0-9]*$"},
         "keptRowId": {"type": "string", "minLength": 1, "maxLength": 160},
-        "duplicateRowIds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 160}}
+        "duplicateRows": {"type": "array", "minItems": 1, "maxItems": 511, "items": {"$ref": "#/$defs/extractedRow"}}
       }
     },
     "coverage": {

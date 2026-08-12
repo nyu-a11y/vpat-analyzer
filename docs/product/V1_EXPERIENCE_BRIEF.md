@@ -18,7 +18,7 @@ Three high-fidelity directions have already been rendered using the same fixture
 
 The owner approved the optimized Document Workbench direction on 2026-08-12. `selectedDirection` is `Document Workbench` and `selectionStatus` is `approved`. The approval reference is the Local Codex Open Design project `nyu-vpat-analyzer-document-workbench-optimized`, with `nyu-vpat-analyzer.html` as its entry artifact. The current approved artifact is `approvedRevision: 9` with `approvedArtifactSha256: 300be6052711fd76e436de8c950a67cb66c4c7555f03453703bd76c360944c95`.
 
-Document Workbench is now the sole V1 production design authority. Calm Utility and Guided Assurance remain historical candidate references and must not be blended into the selected direction. This approval clears only the visual-selection gate; it does not authorize production UI implementation, deployment, or bypass the blocked ingestion gate.
+Document Workbench is now the sole V1 production design authority. Calm Utility and Guided Assurance remain historical candidate references and must not be blended into the selected direction. A later owner instruction authorized the bounded local production implementation; deployment and live Google/provider mutation remain separately controlled.
 
 ## Approved review-workspace refinement
 
@@ -48,4 +48,4 @@ Fixture names and results are synthetic product-design content, not production e
 
 ## Accessibility baseline
 
-Target WCAG 2.2 AA behavior: semantic headings and controls; explicit labels and instructions; visible focus; logical reading/focus order; polite status and assertive error live regions; focus movement/restoration after state changes; 44 px minimum action targets; reflow at 320 px and 200% zoom; no color-only meaning; forced-colors support; reduced-motion support; and no fake progress. VoiceOver, keyboard operation, focus restoration, reading order, 200% zoom/reflow, and final visual comparison require owner sign-off and remain unchecked in Stage 0.
+Target WCAG 2.2 AA behavior: semantic headings and controls; explicit labels and instructions; visible focus; logical reading/focus order; polite status and assertive error live regions; focus movement/restoration after state changes; 44 px minimum action targets; reflow at 320 px and 200% zoom; no color-only meaning; forced-colors support; reduced-motion support; and no fake progress. Automated keyboard, focus, reflow, target-size, forced-colors, reduced-motion, axe, and visual-comparison checks are part of the local Stage 1 proof. VoiceOver and native deployed-browser review remain owner-run acceptance.

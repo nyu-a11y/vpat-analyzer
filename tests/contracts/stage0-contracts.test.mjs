@@ -23,6 +23,9 @@ const REQUIRED_FILES = [
   'docs/contracts/INGESTION_CONTRACT.md',
   'docs/testing/ACCEPTANCE_CASES.md',
   'docs/testing/STAGE_0_INGESTION_GATE.md',
+  'docs/plans/V1_STAGE_1_BUILD_CONTRACT.md',
+  'docs/deployment/V1_LOCAL_BUILD_AND_DEPLOYMENT.md',
+  'config/ingestion-limits.v1.json',
   'config/vpat-2.5-wcag-criteria.v1.json',
   'config/quality-rubric.v1.json',
   'config/scoring-rules.v1.json',
@@ -32,11 +35,19 @@ const REQUIRED_FILES = [
   'schemas/ai-quality-response.v1.schema.json',
   'schemas/export-model.v1.schema.json',
   'schemas/ingestion-result.v1.schema.json',
+  'schemas/stage0-proof-result.v1.schema.json',
   'tests/fixtures/synthetic/google-docs-candidate-tables.v1.json',
   'tests/fixtures/synthetic/expected-wcag-rows.v1.json',
+  'tests/fixtures/synthetic/real-format/manifest.v1.json',
   'tests/fixtures/synthetic/README.md',
   'tests/contracts/stage0-contracts.test.mjs',
   'scripts/stage0-ingestion-blocked.mjs',
+  'scripts/build-stage0-harness.mjs',
+  'scripts/run-stage0-live-proof.mjs',
+  'scripts/build-v1-app.mjs',
+  'scripts/run-v1-browser-proof.mjs',
+  'scripts/serve-v1-preview.mjs',
+  'scripts/fixtures/verify-stage0-fixtures.mjs',
   'scripts/stage1-command-placeholder.mjs',
   'package.json'
 ];
@@ -257,18 +268,21 @@ test('prompts and blocker docs preserve the provider, OCR, and proof boundaries'
   }
   assert.match(quality, /never a `Fail`/);
   assert.match(read('docs/testing/STAGE_0_INGESTION_GATE.md'), /## Status: BLOCKED/);
-  assert.match(read('tests/fixtures/synthetic/README.md'), /absence is an explicit P0 blocker, not passing evidence/);
+  assert.match(read('tests/fixtures/synthetic/README.md'), /real-format synthetic fixtures are now committed/i);
+  assert.match(read('tests/fixtures/synthetic/README.md'), /still do not clear the live gate/);
   assert.match(read('scripts/stage0-ingestion-blocked.mjs'), /process\.exitCode = 2/);
 });
 
-test('package commands run only real Stage 0 contracts and honest blocker sentinels', () => {
+test('package commands retain the honest Stage 0 live sentinel and expose real Stage 1 proof', () => {
   const packageJson = json('package.json');
-  assert.equal(packageJson.scripts.test, 'npm run test:contracts');
+  assert.equal(packageJson.scripts.test, 'npm run test:contracts && npm run test:ingestion && npm run test:domain && npm run test:client && npm run test:server');
   assert.equal(packageJson.scripts['test:contracts'], 'node --test tests/contracts/*.test.mjs');
-  assert.equal(packageJson.scripts['proof:stage0'], 'npm run test:contracts && node scripts/stage0-ingestion-blocked.mjs');
-  for (const command of ['test:a11y', 'test:appscript', 'test:browser', 'proof:stage1']) {
-    assert.match(packageJson.scripts[command], /^node scripts\/stage1-command-placeholder\.mjs /);
-  }
-  assert.match(read('scripts/stage1-command-placeholder.mjs'), /intentionally unavailable in Stage 0/);
-  assert.match(read('scripts/stage1-command-placeholder.mjs'), /process\.exitCode = 2/);
+  assert.equal(packageJson.scripts['test:ingestion'], 'node --test tests/unit/ingestion/*.test.mjs tests/integration/ingestion/*.test.mjs');
+  assert.equal(packageJson.scripts['proof:stage0:local'], 'npm run fixtures:stage0 && npm run test:ingestion && npm run build:harness:stage0 && node scripts/run-stage0-live-proof.mjs --local');
+  assert.equal(packageJson.scripts['proof:stage0:live'], 'node scripts/run-stage0-live-proof.mjs');
+  assert.equal(packageJson.scripts['proof:stage0'], 'npm run test:contracts && npm run proof:stage0:local && node scripts/stage0-ingestion-blocked.mjs');
+  assert.equal(packageJson.scripts['build:v1'], 'node scripts/build-v1-app.mjs');
+  assert.equal(packageJson.scripts['proof:v1:local'], 'npm run build:v1 && node scripts/run-v1-browser-proof.mjs');
+  assert.equal(packageJson.scripts['proof:stage1'], 'npm run test && npm run proof:v1:local');
+  assert.doesNotMatch(packageJson.scripts['proof:stage1'], /placeholder|blocked/i);
 });

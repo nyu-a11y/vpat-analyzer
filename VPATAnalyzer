@@ -115,6 +115,10 @@ const CONFIG = {
   },
 };
 
+const PENDING_TEMP_DOC_CLEANUP_PROPERTY = "VPAT_PENDING_TEMP_DOC_CLEANUP";
+const TEMP_DOC_CLEANUP_MAX_ATTEMPTS = 3;
+const TEMP_DOC_CLEANUP_RETRY_DELAY_MS = 1000;
+
 /*******************************************************
  * MENU FUNCTIONS
  *******************************************************/
@@ -205,23 +209,34 @@ function unhideAllSheets() {
   }
 }
 
+/**
+ * Makes a single sheet visible. Safe to call even if already visible.
+ * @param {string} sheetName - Name of the sheet to reveal
+ */
+function showTabSheet(sheetName) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  if (sheet && sheet.isSheetHidden()) {
+    sheet.showSheet();
+  }
+}
+
 function runCompleteAnalysis() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  unhideAllSheets();
+  let context = null;
 
   try {
     const userConfig = getUserInput();
 
     // Show starting message
     ss.toast("Starting complete VPAT analysis...", "Processing", 5);
+    context = createAnalysisDocumentContext_(userConfig.fileId);
 
     // Step 1: Fill Assessment Information
-    ss.toast(
-      "Step 1/4: Filling assessment information...",
-      "Processing",
-      -1,
+    ss.toast("Step 1/4: Filling assessment information...", "Processing", -1);
+    const assessmentResult = processAssessmentInformation(
+      userConfig.fileId,
+      context,
     );
-    const assessmentResult = processAssessmentInformation(userConfig.fileId);
     if (!assessmentResult || !assessmentResult.success) {
       return;
     }
@@ -233,7 +248,7 @@ function runCompleteAnalysis() {
       "Processing",
       -1,
     );
-    const extractionResult = processVPATDocument(userConfig);
+    const extractionResult = processVPATDocument(userConfig, context);
     if (!extractionResult || !extractionResult.success) {
       return;
     }
@@ -249,10 +264,13 @@ function runCompleteAnalysis() {
 
     // Step 4: Quality checklist analysis
     ss.toast("Step 4/4: Analyzing quality requirements...", "Processing", -1);
-    const qualityResult = analyzeQualityChecklist();
+    const qualityResult = analyzeQualityChecklist(context);
     if (!qualityResult || !qualityResult.success) {
       return;
     }
+
+    // Show scoring sheet now that all tabs are populated
+    showTabSheet(CONFIG.SCORING_SHEET_NAME);
 
     // Success message
     ss.toast("✓ Complete analysis finished successfully!", "Success", 10);
@@ -260,6 +278,8 @@ function runCompleteAnalysis() {
     Logger.log(`Error in runCompleteAnalysis: ${error.message}`);
     Logger.log(error.stack);
     ss.toast(`Error: ${error.message}`, "Analysis Failed", 10);
+  } finally {
+    cleanupAnalysisDocumentContext_(context);
   }
 }
 
@@ -269,7 +289,6 @@ function runCompleteAnalysis() {
  */
 function runExtraction() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  unhideAllSheets();
   try {
     ss.toast("Extracting VPAT data...", "Processing", -1);
     processVPATDocument();
@@ -284,7 +303,6 @@ function runExtraction() {
  */
 function runInterpretation() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  unhideAllSheets();
   try {
     ss.toast("Running AI interpretation...", "Processing", -1);
     interpretConformanceLevels(false); // Show prompt in manual mode
@@ -299,7 +317,6 @@ function runInterpretation() {
  */
 function runQualityAnalysis() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  unhideAllSheets();
   try {
     ss.toast("Running quality analysis...", "Processing", -1);
     analyzeQualityChecklist();
@@ -314,7 +331,6 @@ function runQualityAnalysis() {
  */
 function runAssessmentInformation() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  unhideAllSheets();
   try {
     ss.toast("Filling assessment information...", "Processing", -1);
     processAssessmentInformation();
@@ -328,10 +344,12 @@ function runAssessmentInformation() {
  * Orchestrates the entire workflow
  * @param {Object|null} userConfigOverride - Optional preloaded config from the Start sheet
  */
-function processVPATDocument(userConfigOverride) {
+function processVPATDocument(userConfigOverride, contextOverride) {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.OUTPUT_SHEET_NAME);
+  const ownsContext = !contextOverride;
+  let context = contextOverride || null;
 
   if (!sheet) {
     throw new Error(
@@ -384,16 +402,23 @@ function processVPATDocument(userConfigOverride) {
     showProgress(`Processing ${criteriaMap.size} criteria...`);
 
     // Step 6: Load document and extract tables
-    const documentData = loadDocument(userConfig.fileId);
+    if (!context) {
+      context = createAnalysisDocumentContext_(userConfig.fileId);
+    }
+
+    if (!context.tables || context.tables.length === 0) {
+      throw new Error(
+        "No tables found in document. Please check document structure.",
+      );
+    }
 
     // Step 7: Extract VPAT data from tables
     showProgress(
-      `Extracting data from ${documentData.tables.length} tables...`,
+      `Extracting data from ${context.tables.length} tables...`,
     );
-    const vpatData = extractVPATData(documentData.tables, criteriaMap);
+    const vpatData = extractVPATData(context.tables, criteriaMap);
 
     if (Object.keys(vpatData).length === 0) {
-      cleanup(documentData.tempDocId);
       SpreadsheetApp.getActiveSpreadsheet().toast(
         "No matching VPAT rows were found. Check the file and try again.",
         "Nothing Processed",
@@ -406,10 +431,6 @@ function processVPATDocument(userConfigOverride) {
     showProgress(`Writing data to sheet...`);
     const results = writeDataToSheet(sheet, vpatData, columnMap);
 
-    // Step 10: Cleanup and show results
-    showProgress(`Cleaning up temporary files...`);
-    cleanup(documentData.tempDocId);
-
     if (results.rowsUpdated === 0) {
       SpreadsheetApp.getActiveSpreadsheet().toast(
         "No rows were updated. Check the file and try again.",
@@ -420,6 +441,7 @@ function processVPATDocument(userConfigOverride) {
     }
 
     // Use toast instead of blocking alert
+    showTabSheet(CONFIG.OUTPUT_SHEET_NAME);
     const message = `✓ Complete! Updated ${results.rowsUpdated} of ${results.totalRows} rows`;
     SpreadsheetApp.getActiveSpreadsheet().toast(message, "Success", 10);
     return { success: true, results: results };
@@ -435,6 +457,10 @@ function processVPATDocument(userConfigOverride) {
     );
     return { success: false, reason: "error", message: error.message };
   } finally {
+    if (ownsContext) {
+      cleanupAnalysisDocumentContext_(context);
+    }
+
     // Always hide progress, never throw
     try {
       hideProgress();
@@ -629,7 +655,9 @@ function looksLikeDriveFileId(value) {
  * @returns {boolean} True when the host is a supported Google file URL host
  */
 function isSupportedGoogleFileUrl(hostValue) {
-  const host = String(hostValue || "").trim().toLowerCase();
+  const host = String(hostValue || "")
+    .trim()
+    .toLowerCase();
 
   return host === "drive.google.com" || host === "docs.google.com";
 }
@@ -695,7 +723,9 @@ function isAccessibleDriveFileId(fileId) {
     DriveApp.getFileById(fileId);
     return true;
   } catch (error) {
-    Logger.log(`Drive file lookup failed for candidate ID "${fileId}": ${error.message}`);
+    Logger.log(
+      `Drive file lookup failed for candidate ID "${fileId}": ${error.message}`,
+    );
     return false;
   }
 }
@@ -711,10 +741,11 @@ function isAccessibleDriveFileId(fileId) {
  * @param {string} fileIdOverride - Optional Drive file ID to reuse from a caller
  * @returns {Object} Processing result
  */
-function processAssessmentInformation(fileIdOverride) {
+function processAssessmentInformation(fileIdOverride, contextOverride) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.ASSESSMENT_SHEET_NAME);
-  let tempDocId = null;
+  const ownsContext = !contextOverride;
+  let context = contextOverride || null;
 
   if (!sheet) {
     throw new Error(
@@ -723,17 +754,15 @@ function processAssessmentInformation(fileIdOverride) {
   }
 
   try {
-    const fileId = fileIdOverride || getUserInput().fileId;
+    const fileId =
+      fileIdOverride || (context && context.sourceFileId) || getUserInput().fileId;
 
-    showProgress("Loading VPAT document for assessment information...");
-    const documentData = openDocumentForProcessing(fileId);
-    tempDocId = documentData.tempDocId;
+    if (!context) {
+      showProgress("Loading VPAT document for assessment information...");
+      context = createAnalysisDocumentContext_(fileId);
+    }
 
-    const body = documentData.doc.getBody();
-    const metadata = extractAssessmentFields(
-      body.getText(),
-      body.getTables(),
-    );
+    const metadata = extractAssessmentFields(context.text, context.tables);
     const runtimeMetadata = getAssessmentRuntimeMetadata();
 
     showProgress("Writing assessment information to sheet...");
@@ -752,6 +781,7 @@ function processAssessmentInformation(fileIdOverride) {
       return { success: false, reason: "no-updates", results: results };
     }
 
+    showTabSheet(CONFIG.ASSESSMENT_SHEET_NAME);
     SpreadsheetApp.getActiveSpreadsheet().toast(
       `✓ Assessment information updated ${results.rowsUpdated} of ${results.totalRows} rows`,
       "Success",
@@ -768,7 +798,10 @@ function processAssessmentInformation(fileIdOverride) {
     );
     return { success: false, reason: "error", message: error.message };
   } finally {
-    cleanup(tempDocId);
+    if (ownsContext) {
+      cleanupAnalysisDocumentContext_(context);
+    }
+
     try {
       hideProgress();
     } catch (e) {
@@ -779,6 +812,10 @@ function processAssessmentInformation(fileIdOverride) {
 
 /**
  * Extracts assessment-information label/value pairs from the document text and tables.
+ * After all collectors run, Contact Information is split into two clean buckets:
+ *   - Contact Information → email(s), phone(s), URLs only
+ *   - Author             → name, title, org (populated only if still empty)
+ * This prevents duplicate information across both fields.
  * @param {string} documentText - Full document text
  * @param {GoogleAppsScript.Document.Table[]} tables - Tables from the document body
  * @returns {Map<string, {label: string, value: string}>} Normalized label -> entry
@@ -788,15 +825,105 @@ function extractAssessmentFields(documentText, tables) {
 
   collectAssessmentFieldsFromTables(metadata, tables || []);
   collectAssessmentFieldsFromText(metadata, documentText || "");
-  collectAssessmentFieldsFromDocumentHeuristics(
-    metadata,
-    documentText || "",
-  );
+  collectAssessmentFieldsFromDocumentHeuristics(metadata, documentText || "");
+
+  // Find the Contact Information entry under any of its common normalized keys.
+  const contactKeys = ["contact information", "contact info", "vendor contact"];
+  let contactKey = null;
+  let contactEntry = null;
+  for (const key of contactKeys) {
+    if (metadata.has(key)) {
+      contactKey = key;
+      contactEntry = metadata.get(key);
+      break;
+    }
+  }
+
+  if (contactEntry) {
+    const split = splitContactFieldValue(contactEntry.value);
+
+    // Overwrite Contact Information with only the communication mediums.
+    if (split.contactPart) {
+      metadata.set(contactKey, {
+        label: contactEntry.label,
+        value: split.contactPart,
+        source: contactEntry.source || "table",
+      });
+      Logger.log(
+        `[Assessment Information] Contact Information trimmed to: "${split.contactPart}"`,
+      );
+    }
+
+    // Populate Author with the non-contact segments if Author is still empty.
+    if (split.authorPart && !metadata.has("author")) {
+      metadata.set("author", {
+        label: "Author",
+        value: split.authorPart,
+        source: "contact_info_derived",
+      });
+      Logger.log(
+        `[Assessment Information] Derived author details "${split.authorPart}" from Contact Information.`,
+      );
+    }
+  }
 
   Logger.log(
     `Extracted ${metadata.size} assessment-information fields from the document.`,
   );
   return metadata;
+}
+
+/**
+ * Splits a raw contact information string into two buckets:
+ *   contactPart — communication mediums: email addresses, phone numbers, URLs
+ *   authorPart  — everything else: personal name, job title, organisation
+ *
+ * Examples:
+ *   "Chad Rowe, VP Product, crowe@moderncampus.com"
+ *     → contactPart: "crowe@moderncampus.com"
+ *     → authorPart:  "Chad Rowe, VP Product"
+ *
+ *   "Jane Smith (Acme Corp) +1 800-555-0100 jsmith@acme.com"
+ *     → contactPart: "+1 800-555-0100, jsmith@acme.com"
+ *     → authorPart:  "Jane Smith, Acme Corp"
+ *
+ * @param {string} rawValue - Raw contact information string
+ * @returns {{contactPart: string, authorPart: string}}
+ */
+function splitContactFieldValue(rawValue) {
+  const text = cleanAssessmentFieldValue(rawValue);
+  if (!text) return { contactPart: "", authorPart: "" };
+
+  // Split on comma, semicolon, pipe, newline, or parentheses boundaries.
+  const segments = text
+    .split(/[,;|\n()]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const contactSegments = [];
+  const authorSegments = [];
+
+  const emailPattern = /\S+@\S+\.\S+/;
+  const phonePattern = /^[+]?[\d][\d\s\-.()]{6,}$/;
+  const urlPattern = /https?:\/\//i;
+
+  for (const segment of segments) {
+    if (emailPattern.test(segment) || urlPattern.test(segment)) {
+      // Email or URL — goes to Contact Information
+      contactSegments.push(segment);
+    } else if (phonePattern.test(segment.replace(/\s/g, ""))) {
+      // Phone number — goes to Contact Information
+      contactSegments.push(segment);
+    } else {
+      // Name, title, org — goes to Author
+      authorSegments.push(segment);
+    }
+  }
+
+  return {
+    contactPart: contactSegments.join(", "),
+    authorPart: authorSegments.join(", "),
+  };
 }
 
 /**
@@ -811,12 +938,17 @@ function collectAssessmentFieldsFromDocumentHeuristics(metadata, documentText) {
 
   const title = findAssessmentDocumentTitle(lines);
   if (title) {
-    upsertAssessmentField(metadata, "Document Title (VPAT Title)", title);
+    upsertAssessmentField(
+      metadata,
+      "Document Title (VPAT Title)",
+      title,
+      "heuristic",
+    );
   }
 
   const vpatVersion = findAssessmentVpatVersion(documentText);
   if (vpatVersion) {
-    upsertAssessmentField(metadata, "VPAT Version", vpatVersion);
+    upsertAssessmentField(metadata, "VPAT Version", vpatVersion, "heuristic");
   }
 
   const reportDate = findAssessmentValueByLabels(lines, [
@@ -830,7 +962,7 @@ function collectAssessmentFieldsFromDocumentHeuristics(metadata, documentText) {
     "date",
   ]);
   if (reportDate) {
-    upsertAssessmentField(metadata, "Date", reportDate);
+    upsertAssessmentField(metadata, "Date", reportDate, "heuristic");
   }
 
   const author = findAssessmentValueByLabels(lines, [
@@ -841,7 +973,7 @@ function collectAssessmentFieldsFromDocumentHeuristics(metadata, documentText) {
     "prepared by company",
   ]);
   if (author) {
-    upsertAssessmentField(metadata, "Author", author);
+    upsertAssessmentField(metadata, "Author", author, "heuristic");
   }
 }
 
@@ -872,9 +1004,6 @@ function findAssessmentDocumentTitle(lines) {
     if (!line || line.length < 8 || line.length > 180) {
       continue;
     }
-    if (line.includes(":")) {
-      continue;
-    }
     if (
       /^page\s+\d+(\s+of\s+\d+)?$/i.test(line) ||
       /^[\d\s._-]+$/.test(line) ||
@@ -884,6 +1013,9 @@ function findAssessmentDocumentTitle(lines) {
     }
 
     let score = 0;
+    if (line.includes(":")) {
+      score -= 1; // Slight penalty — don't skip; real titles like "ACR: Product Name" are valid
+    }
     if (/accessibility conformance report/i.test(line)) {
       score += 10;
     }
@@ -955,7 +1087,10 @@ function findAssessmentValueByLabels(lines, labels) {
       `^${escapedLabel}\\s*[:\\-–]\\s*(.+)$`,
       "i",
     );
-    const labelOnlyPattern = new RegExp(`^${escapedLabel}\\s*[:\\-–]?\\s*$`, "i");
+    const labelOnlyPattern = new RegExp(
+      `^${escapedLabel}\\s*[:\\-–]?\\s*$`,
+      "i",
+    );
 
     for (let i = 0; i < cleanedLines.length; i++) {
       const line = cleanedLines[i];
@@ -1025,13 +1160,55 @@ function escapeRegExp(value) {
 }
 
 /**
+ * Returns true when the table looks like a VPAT criteria table (3-column
+ * Criteria / Conformance Level / Remarks format, or WCAG numeric first cell).
+ * These tables must be skipped during metadata extraction to avoid polluting
+ * the assessment-information map with hundreds of criteria-row entries.
+ * @param {GoogleAppsScript.Document.Table} table
+ * @returns {boolean}
+ */
+function isVPATCriteriaTable(table) {
+  if (table.getNumRows() < 2) return false;
+
+  const firstRow = table.getRow(0);
+  const numCols = firstRow.getNumCells();
+
+  // VPAT criteria tables always have exactly 3 columns
+  if (numCols === CONFIG.EXPECTED_TABLE_COLUMNS) {
+    const headerTexts = [];
+    for (let c = 0; c < numCols; c++) {
+      headerTexts.push(getCellText(firstRow.getCell(c)).toLowerCase().trim());
+    }
+    const criteriaPattern = /^criteria|^conformance\s+level|^remarks/;
+    const matchCount = headerTexts.filter((h) =>
+      criteriaPattern.test(h),
+    ).length;
+    if (matchCount >= 2) return true;
+  }
+
+  // Also detect by WCAG numeric pattern in the first data cell (e.g. "1.1.1", "4.1")
+  const dataRow = table.getRow(1);
+  if (dataRow.getNumCells() > 0) {
+    const firstCell = getCellText(dataRow.getCell(0)).trim();
+    if (/^[0-9]+\.[0-9]+/.test(firstCell)) return true;
+  }
+
+  return false;
+}
+
+/**
  * Collects assessment fields from label/value tables.
  * Handles both 2-column rows and even-numbered label/value pairs across a row.
+ * Skips VPAT criteria tables (3-column Criteria/Conformance/Remarks format).
  * @param {Map<string, {label: string, value: string}>} metadata - Output map
  * @param {GoogleAppsScript.Document.Table[]} tables - Document tables
  */
 function collectAssessmentFieldsFromTables(metadata, tables) {
   for (const table of tables) {
+    if (isVPATCriteriaTable(table)) {
+      continue;
+    }
+
     const numRows = table.getNumRows();
 
     for (let i = 0; i < numRows; i++) {
@@ -1051,7 +1228,12 @@ function collectAssessmentFieldsFromTables(metadata, tables) {
 
       if (cellTexts.length >= 4 && cellTexts.length % 2 === 0) {
         for (let c = 0; c < cellTexts.length; c += 2) {
-          upsertAssessmentField(metadata, cellTexts[c], cellTexts[c + 1]);
+          upsertAssessmentField(
+            metadata,
+            cellTexts[c],
+            cellTexts[c + 1],
+            "table",
+          );
         }
         continue;
       }
@@ -1060,6 +1242,7 @@ function collectAssessmentFieldsFromTables(metadata, tables) {
         metadata,
         cellTexts[0],
         cellTexts.slice(1).join(" "),
+        "table",
       );
     }
   }
@@ -1107,6 +1290,7 @@ function collectAssessmentFieldsFromText(metadata, documentText) {
           metadata,
           labelOnlyMatch[1],
           valueLines.join(" "),
+          "text",
         );
         i = j - 1;
       }
@@ -1115,19 +1299,28 @@ function collectAssessmentFieldsFromText(metadata, documentText) {
 
     const inlineMatch = line.match(/^([^:]{2,80}):\s*(.+)$/);
     if (inlineMatch) {
-      upsertAssessmentField(metadata, inlineMatch[1], inlineMatch[2]);
+      upsertAssessmentField(metadata, inlineMatch[1], inlineMatch[2], "text");
     }
   }
 }
 
 /**
+ * Source priority for assessment field extraction.
+ * Table-extracted data is most reliable; heuristic is least reliable.
+ * A higher-priority source never gets overwritten by a lower-priority one.
+ */
+const ASSESSMENT_SOURCE_PRIORITY = { table: 3, text: 2, heuristic: 1 };
+
+/**
  * Inserts or updates a single assessment-information entry.
- * Prefers more descriptive values when the same label is found multiple times.
+ * Respects source priority: table > text > heuristic.
+ * Within the same source tier, prefers more descriptive values.
  * @param {Map<string, {label: string, value: string}>} metadata - Output map
  * @param {string} label - Raw field label
  * @param {string} value - Raw field value
+ * @param {string} [source] - Extraction source: "table", "text", or "heuristic"
  */
-function upsertAssessmentField(metadata, label, value) {
+function upsertAssessmentField(metadata, label, value, source) {
   if (!isLikelyAssessmentFieldLabel(label)) {
     return;
   }
@@ -1139,14 +1332,39 @@ function upsertAssessmentField(metadata, label, value) {
     return;
   }
 
+  const resolvedSource = source || "heuristic";
   const existing = metadata.get(normalizedLabel);
+
+  if (!existing) {
+    metadata.set(normalizedLabel, {
+      label: String(label || "")
+        .replace(/\s+/g, " ")
+        .trim(),
+      value: cleanedValue,
+      source: resolvedSource,
+    });
+    return;
+  }
+
+  const existingPriority = ASSESSMENT_SOURCE_PRIORITY[existing.source] || 1;
+  const newPriority = ASSESSMENT_SOURCE_PRIORITY[resolvedSource] || 1;
+
+  // Lower-priority source never overwrites a higher-priority one
+  if (newPriority < existingPriority) {
+    return;
+  }
+
+  // Higher-priority source always wins; same priority falls back to value heuristic
   if (
-    !existing ||
+    newPriority > existingPriority ||
     shouldReplaceAssessmentFieldValue(existing.value, cleanedValue)
   ) {
     metadata.set(normalizedLabel, {
-      label: String(label || "").replace(/\s+/g, " ").trim(),
+      label: String(label || "")
+        .replace(/\s+/g, " ")
+        .trim(),
       value: cleanedValue,
+      source: resolvedSource,
     });
   }
 }
@@ -1157,7 +1375,9 @@ function upsertAssessmentField(metadata, label, value) {
  * @returns {boolean} True when the label looks like a field name
  */
 function isLikelyAssessmentFieldLabel(label) {
-  const cleaned = String(label || "").replace(/\s+/g, " ").trim();
+  const cleaned = String(label || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!cleaned) {
     return false;
   }
@@ -1220,7 +1440,9 @@ function simplifyAssessmentFieldLabel(label) {
  * @returns {string} Cleaned field value
  */
 function cleanAssessmentFieldValue(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -1267,10 +1489,7 @@ function findAssessmentEntryForLabel(sheetLabel, metadata) {
   let secondBestScore = 0;
 
   for (const [candidateLabel, entry] of metadata.entries()) {
-    const score = scoreAssessmentFieldMatch(
-      normalizedLabel,
-      candidateLabel,
-    );
+    const score = scoreAssessmentFieldMatch(normalizedLabel, candidateLabel);
 
     if (score > bestScore) {
       secondBestScore = bestScore;
@@ -1311,9 +1530,8 @@ function scoreAssessmentFieldMatch(label, candidate) {
   const simplifiedLabel = simplifyAssessmentFieldLabel(normalizedLabel);
   const simplifiedCandidate = simplifyAssessmentFieldLabel(normalizedCandidate);
   const canonicalLabel = getAssessmentFieldCanonicalKey(simplifiedLabel);
-  const canonicalCandidate = getAssessmentFieldCanonicalKey(
-    simplifiedCandidate,
-  );
+  const canonicalCandidate =
+    getAssessmentFieldCanonicalKey(simplifiedCandidate);
 
   if (simplifiedLabel && simplifiedLabel === simplifiedCandidate) {
     return 0.95;
@@ -1363,9 +1581,7 @@ function getAssessmentFieldCanonicalKey(label) {
 
   if (
     tokenSet.has("title") &&
-    (tokenSet.has("document") ||
-      tokenSet.has("vpat") ||
-      tokenSet.has("report"))
+    (tokenSet.has("document") || tokenSet.has("vpat") || tokenSet.has("report"))
   ) {
     return "document_title";
   }
@@ -1425,12 +1641,6 @@ function getAssessmentRuntimeMetadata() {
 
   upsertAssessmentRuntimeField(
     runtimeMetadata,
-    "Name",
-    userProfile.name,
-    userProfile.nameSource,
-  );
-  upsertAssessmentRuntimeField(
-    runtimeMetadata,
     "Email",
     userProfile.email,
     userProfile.emailSource,
@@ -1455,11 +1665,7 @@ function getAssessmentRuntimeMetadata() {
  */
 function isRuntimeAssessmentFieldLabel(label) {
   const normalizedLabel = normalizeAssessmentFieldLabel(label);
-  const runtimeLabels = [
-    "name",
-    "email",
-    "date of evaluation",
-  ];
+  const runtimeLabels = ["name", "email", "date of evaluation"];
 
   return runtimeLabels.includes(normalizedLabel);
 }
@@ -1529,32 +1735,17 @@ function getCurrentAssessmentUserProfileFromPeopleApi() {
       people && people.responses && people.responses.length > 0
         ? people.responses[0]
         : null;
-    const person = personResponse && personResponse.person
-      ? personResponse.person
-      : null;
-
-    const resolvedName = getPrimaryPeopleFieldValue(
-      person && person.names,
-      "displayName",
-    );
-    const resolvedEmail = getPrimaryPeopleFieldValue(
-      person && person.emailAddresses,
-      "value",
-    );
-
-    if (!resolvedName && !resolvedEmail) {
-      Logger.log(
-        "[Assessment Information] People API returned no profile fields for people/me. " +
-          "Check that the Advanced People service is enabled and that the script has " +
-          "userinfo.profile and userinfo.email scopes granted.",
-      );
-    }
+    const person =
+      personResponse && personResponse.person ? personResponse.person : null;
 
     return {
-      name: resolvedName,
-      email: resolvedEmail,
-      nameSource: resolvedName ? "people_api" : "",
-      emailSource: resolvedEmail ? "people_api" : "",
+      name: getPrimaryPeopleFieldValue(person && person.names, "displayName"),
+      email: getPrimaryPeopleFieldValue(
+        person && person.emailAddresses,
+        "value",
+      ),
+      nameSource: "people_api",
+      emailSource: "people_api",
     };
   } catch (error) {
     Logger.log(`Unable to read current People user profile: ${error.message}`);
@@ -1576,9 +1767,7 @@ function getCurrentAssessmentUserProfileFromPeopleApi() {
  */
 function getCurrentAssessmentUserProfileFromDrive() {
   try {
-    const about = Drive.About.get({
-      fields: "user(displayName,emailAddress)",
-    });
+    const about = Drive.About.get();
     const user = about && about.user ? about.user : null;
     const driveName = cleanAssessmentFieldValue(user && user.displayName);
     const driveEmail = cleanAssessmentFieldValue(
@@ -1676,13 +1865,10 @@ function getPrimaryPeopleFieldValue(fields, valueKey) {
   }
 
   const primaryField =
-    fields.find(
-      (field) => field && field.metadata && field.metadata.primary,
-    ) || fields[0];
+    fields.find((field) => field && field.metadata && field.metadata.primary) ||
+    fields[0];
 
-  return cleanAssessmentFieldValue(
-    primaryField && primaryField[valueKey],
-  );
+  return cleanAssessmentFieldValue(primaryField && primaryField[valueKey]);
 }
 
 /**
@@ -1707,7 +1893,9 @@ function upsertAssessmentRuntimeField(metadata, label, value, source) {
   }
 
   metadata.set(normalizedLabel, {
-    label: String(label || "").replace(/\s+/g, " ").trim(),
+    label: String(label || "")
+      .replace(/\s+/g, " ")
+      .trim(),
     value: cleanedValue,
     source: String(source || "").trim(),
   });
@@ -1936,46 +2124,87 @@ function normalizeCriteriaKey(text) {
  *******************************************************/
 
 /**
- * Loads a Drive document and returns an opened Google Doc for downstream processing.
+ * Creates the shared document context used by complete-analysis document readers.
  * @param {string} fileId - Google Drive file ID
- * @returns {Object} Object containing DocumentApp.Document and optional tempDocId
+ * @returns {Object} Shared document context
  */
-function openDocumentForProcessing(fileId) {
+function createAnalysisDocumentContext_(fileId) {
   let tempDocId = null;
 
   try {
     const file = DriveApp.getFileById(fileId);
-    const mimeType = file.getMimeType();
+    const sourceMimeType = file.getMimeType();
 
     let docId = fileId;
 
     if (
-      mimeType ===
+      sourceMimeType ===
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ) {
       Logger.log(`Converting DOCX to Google Doc: ${file.getName()}`);
       docId = convertDocxToGoogleDoc(file);
       tempDocId = docId;
-    } else if (mimeType === "application/pdf") {
+    } else if (sourceMimeType === "application/pdf") {
       Logger.log(`Converting PDF to Google Doc (with OCR): ${file.getName()}`);
       docId = convertPdfToGoogleDoc(file);
       tempDocId = docId;
-    } else if (mimeType !== "application/vnd.google-apps.document") {
+    } else if (sourceMimeType !== "application/vnd.google-apps.document") {
       throw new Error(
-        `Unsupported file type: ${mimeType}. Please use Google Doc, DOCX, or PDF format.`,
+        `Unsupported file type: ${sourceMimeType}. Please use Google Doc, DOCX, or PDF format.`,
       );
     }
 
+    const doc = DocumentApp.openById(docId);
+    const body = doc.getBody();
+
     return {
-      doc: DocumentApp.openById(docId),
+      sourceFileId: fileId,
+      sourceFileName: file.getName(),
+      sourceMimeType: sourceMimeType,
+      docId: docId,
       tempDocId: tempDocId,
+      doc: doc,
+      body: body,
+      text: body.getText(),
+      tables: body.getTables(),
     };
   } catch (error) {
     if (tempDocId) {
-      cleanupTempDoc(tempDocId);
+      cleanup(tempDocId);
     }
     throw new Error(`Failed to load document: ${error.message}`);
   }
+}
+
+/**
+ * Cleans up the temporary document owned by an analysis context.
+ * Safe to call with null or with the same context more than once.
+ * @param {Object|null} context - Shared document context
+ * @returns {boolean} True when no cleanup was needed or cleanup succeeded
+ */
+function cleanupAnalysisDocumentContext_(context) {
+  if (!context || !context.tempDocId) {
+    return true;
+  }
+
+  const tempDocId = context.tempDocId;
+  context.tempDocId = null;
+  return cleanup(tempDocId);
+}
+
+/**
+ * Loads a Drive document and returns an opened Google Doc for downstream processing.
+ * @param {string} fileId - Google Drive file ID
+ * @returns {Object} Object containing DocumentApp.Document and optional tempDocId
+ */
+function openDocumentForProcessing(fileId) {
+  const context = createAnalysisDocumentContext_(fileId);
+
+  return {
+    doc: context.doc,
+    tempDocId: context.tempDocId,
+    context: context,
+  };
 }
 
 /**
@@ -1985,23 +2214,26 @@ function openDocumentForProcessing(fileId) {
  * @returns {Object} Object containing tables array, document, and optional tempDocId
  */
 function loadDocument(fileId) {
-  try {
-    const documentData = openDocumentForProcessing(fileId);
-    const tables = documentData.doc.getBody().getTables();
+  let context = null;
 
-    if (!tables || tables.length === 0) {
-      cleanup(documentData.tempDocId);
+  try {
+    context = createAnalysisDocumentContext_(fileId);
+
+    if (!context.tables || context.tables.length === 0) {
+      cleanupAnalysisDocumentContext_(context);
       throw new Error(
         "No tables found in document. Please check document structure.",
       );
     }
 
     return {
-      doc: documentData.doc,
-      tables: tables,
-      tempDocId: documentData.tempDocId,
+      doc: context.doc,
+      tables: context.tables,
+      tempDocId: context.tempDocId,
+      context: context,
     };
   } catch (error) {
+    cleanupAnalysisDocumentContext_(context);
     throw error;
   }
 }
@@ -2230,27 +2462,173 @@ function hideProgress() {
 /**
  * Cleans up temporary document if it exists
  * @param {string|null} tempDocId - Temporary document ID
+ * @returns {boolean} True when no cleanup was needed or cleanup succeeded
  */
 function cleanup(tempDocId) {
   if (tempDocId) {
-    cleanupTempDoc(tempDocId);
+    return cleanupTempDoc(tempDocId);
   }
+  return true;
 }
 
 /**
  * Deletes temporary document from Drive
  * @param {string} docId - Document ID to delete
+ * @returns {boolean} True when cleanup succeeded
  */
 function cleanupTempDoc(docId) {
-  try {
-    // Use DriveApp instead of Drive API for more reliable deletion
-    const file = DriveApp.getFileById(docId);
-    file.setTrashed(true);
-    Logger.log(`Cleaned up temporary document: ${docId}`);
-  } catch (error) {
-    // Don't throw - just log the error
-    Logger.log(`Failed to cleanup temp doc ${docId}: ${error.message}`);
+  let lastErrorMessage = "";
+
+  for (let attempt = 1; attempt <= TEMP_DOC_CLEANUP_MAX_ATTEMPTS; attempt++) {
+    try {
+      // Use DriveApp instead of Drive API for more reliable deletion
+      const file = DriveApp.getFileById(docId);
+      file.setTrashed(true);
+      try {
+        removePendingTempDocCleanup_(docId);
+      } catch (pendingError) {
+        Logger.log(
+          `Cleaned up temporary document ${docId}, but failed to clear pending cleanup record: ${pendingError.message}`,
+        );
+      }
+      Logger.log(`Cleaned up temporary document: ${docId}`);
+      return true;
+    } catch (error) {
+      lastErrorMessage = error && error.message ? error.message : String(error);
+      Logger.log(
+        `Failed to cleanup temp doc ${docId} on attempt ${attempt}/${TEMP_DOC_CLEANUP_MAX_ATTEMPTS}: ${lastErrorMessage}`,
+      );
+
+      if (attempt < TEMP_DOC_CLEANUP_MAX_ATTEMPTS) {
+        Utilities.sleep(TEMP_DOC_CLEANUP_RETRY_DELAY_MS * attempt);
+      }
+    }
   }
+
+  try {
+    recordPendingTempDocCleanup_(docId, lastErrorMessage);
+  } catch (pendingError) {
+    Logger.log(
+      `Failed to record pending cleanup for temp doc ${docId}: ${pendingError.message}`,
+    );
+  }
+  return false;
+}
+
+/**
+ * Retries cleanup for temporary documents recorded after previous failures.
+ * Run manually from Apps Script or attach to a time-based trigger if needed.
+ * @returns {{success: boolean, attempted: number, cleaned: number, remaining: number}}
+ */
+function cleanupPendingTempDocs() {
+  const pendingRecords = getPendingTempDocCleanupRecords_();
+  const pendingDocIds = Object.keys(pendingRecords);
+  let cleaned = 0;
+
+  for (const docId of pendingDocIds) {
+    if (cleanupTempDoc(docId)) {
+      cleaned++;
+    }
+  }
+
+  const remaining = Object.keys(getPendingTempDocCleanupRecords_()).length;
+  Logger.log(
+    `Pending temp-doc cleanup complete. Attempted: ${pendingDocIds.length}, cleaned: ${cleaned}, remaining: ${remaining}`,
+  );
+
+  return {
+    success: remaining === 0,
+    attempted: pendingDocIds.length,
+    cleaned: cleaned,
+    remaining: remaining,
+  };
+}
+
+/**
+ * Reads pending temp-doc cleanup records from script properties.
+ * @returns {Object<string, Object>} Pending cleanup records keyed by doc ID
+ */
+function getPendingTempDocCleanupRecords_() {
+  const properties = PropertiesService.getScriptProperties();
+  const rawValue = properties.getProperty(PENDING_TEMP_DOC_CLEANUP_PROPERTY);
+
+  if (!rawValue) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch (error) {
+    Logger.log(
+      `Failed to parse pending temp-doc cleanup records: ${error.message}`,
+    );
+    return {};
+  }
+}
+
+/**
+ * Saves pending temp-doc cleanup records to script properties.
+ * @param {Object<string, Object>} records - Pending records keyed by doc ID
+ */
+function savePendingTempDocCleanupRecords_(records) {
+  const properties = PropertiesService.getScriptProperties();
+  const docIds = Object.keys(records || {});
+
+  if (docIds.length === 0) {
+    properties.deleteProperty(PENDING_TEMP_DOC_CLEANUP_PROPERTY);
+    return;
+  }
+
+  properties.setProperty(
+    PENDING_TEMP_DOC_CLEANUP_PROPERTY,
+    JSON.stringify(records),
+  );
+}
+
+/**
+ * Records a temp doc that could not be cleaned up after retries.
+ * @param {string} docId - Temporary document ID
+ * @param {string} errorMessage - Last cleanup error message
+ */
+function recordPendingTempDocCleanup_(docId, errorMessage) {
+  if (!docId) {
+    return;
+  }
+
+  const records = getPendingTempDocCleanupRecords_();
+  const now = new Date().toISOString();
+  const existing = records[docId] || {};
+
+  records[docId] = {
+    docId: docId,
+    firstFailedAt: existing.firstFailedAt || now,
+    lastFailedAt: now,
+    attempts: Number(existing.attempts || 0) + 1,
+    lastError: String(errorMessage || ""),
+  };
+
+  savePendingTempDocCleanupRecords_(records);
+}
+
+/**
+ * Removes a temp doc from the pending cleanup queue after successful cleanup.
+ * @param {string} docId - Temporary document ID
+ */
+function removePendingTempDocCleanup_(docId) {
+  if (!docId) {
+    return;
+  }
+
+  const records = getPendingTempDocCleanupRecords_();
+  if (!Object.prototype.hasOwnProperty.call(records, docId)) {
+    return;
+  }
+
+  delete records[docId];
+  savePendingTempDocCleanupRecords_(records);
 }
 
 /**
@@ -2364,6 +2742,7 @@ function interpretConformanceLevels(skipPrompt) {
     }
 
     // Step 6: Show completion
+    showTabSheet(CONFIG.OUTPUT_SHEET_NAME);
     const message = `✓ Interpreted ${results.success} of ${rowsToProcess.length} rows`;
     SpreadsheetApp.getActiveSpreadsheet().toast(message, "Success", 10);
     return { success: true, results: results };
@@ -2650,7 +3029,9 @@ function getConfidenceThreshold(spreadsheet) {
 }
 
 function normalizePromptConfigNameCell(value) {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
   const prefixedMatch = normalized.match(/^prompt name\s+(.+)$/i);
   return prefixedMatch ? prefixedMatch[1].trim() : normalized;
 }
@@ -2938,7 +3319,7 @@ function buildBatchMessage(batchData) {
 {
   "entryIndex": <integer matching the Entry number above>,
   "conformanceLevel": "Supports|Partially Supports|Does Not Support|Not Applicable|Not Evaluated",
-  "appliesToMediums": "Comma-separated list of mediums EXPLICITLY mentioned by the author in the Remarks. Choose ONLY from: Web, Electronic Docs, Software, Closed, Authoring Tool. Use empty string if none are explicitly named.",
+  "appliesToMediums": "Comma-separated list of mediums EXPLICITLY mentioned by the author in the Conformance Level or Remarks. VPATs often encode per-medium support directly in the Conformance Level field (e.g. 'Web: Supported\\nElectronic Docs: Supported'). Choose ONLY from: Web, Electronic Docs, Software, Closed, Authoring Tool. Use empty string if none are explicitly named.",
   "comment": "Short evaluation summary explaining why the standardized conformance level fits the VPAT remarks",
   "confidence": <integer 0-100>
 }
@@ -3507,13 +3888,18 @@ function parseGeminiResponseText(responseText) {
  * Groups by criteria number and processes in batches
  * Writes AI responses back to the quality analysis output columns
  */
-function analyzeQualityChecklist() {
+function analyzeQualityChecklist(contextOverride) {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ownsContext = !contextOverride;
+  let context = contextOverride || null;
 
   try {
     // Step 1: Get file ID from Start sheet
-    const fileId = getVPATFileIdForAnalysis();
+    const fileId =
+      context && context.sourceFileId
+        ? context.sourceFileId
+        : getVPATFileIdForAnalysis();
     if (!fileId) {
       return { success: false, reason: "no-file-id" };
     }
@@ -3536,7 +3922,10 @@ function analyzeQualityChecklist() {
 
     // Step 4: Load VPAT document text
     showProgress("Loading VPAT document...");
-    const documentText = extractFullDocumentText(fileId);
+    if (!context) {
+      context = createAnalysisDocumentContext_(fileId);
+    }
+    const documentText = getQualityDocumentTextFromContext_(context);
     Logger.log(`Extracted ${documentText.length} characters from document`);
 
     // Step 5: Get system prompt
@@ -3563,12 +3952,17 @@ function analyzeQualityChecklist() {
       return { success: false, reason: "no-writes", results: writeResults };
     }
 
+    showTabSheet(CONFIG.QUALITY_CHECKLIST.SHEET_NAME);
     SpreadsheetApp.getActiveSpreadsheet().toast(
       `✓ Quality analysis complete! Updated ${writeResults.rowsWritten} of ${writeResults.totalRows} requirements`,
       "Success",
       10,
     );
-    return { success: true, count: writeResults.rowsWritten, results: writeResults };
+    return {
+      success: true,
+      count: writeResults.rowsWritten,
+      results: writeResults,
+    };
   } catch (error) {
     console.error(
       `[analyzeQualityChecklist] Unhandled error during quality checklist analysis. ` +
@@ -3581,6 +3975,9 @@ function analyzeQualityChecklist() {
     );
     return { success: false, reason: "error", message: error.message };
   } finally {
+    if (ownsContext) {
+      cleanupAnalysisDocumentContext_(context);
+    }
     hideProgress();
   }
 }
@@ -3686,7 +4083,10 @@ function resolveQualityChecklistColumns(sheet) {
 }
 
 function normalizeQualityHeaderValue(value) {
-  return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function qualityHeaderMatches(headerValue, expectedHeader) {
@@ -3838,38 +4238,41 @@ function groupRequirementsByCriteria(requirements) {
 }
 
 /**
- * Extracts full text from VPAT document for analysis
+ * Extracts and truncates document text from an already-opened context.
+ * @param {Object} context - Shared document context
+ * @returns {string} Text prepared for quality checklist analysis
+ */
+function getQualityDocumentTextFromContext_(context) {
+  let fullText = context && context.text ? context.text : "";
+
+  // Truncate if too long
+  const maxLength = CONFIG.QUALITY_CHECKLIST.MAX_DOC_LENGTH;
+  if (fullText.length > maxLength) {
+    Logger.log(
+      `Document truncated from ${fullText.length} to ${maxLength} characters`,
+    );
+    fullText =
+      fullText.substring(0, maxLength) +
+      "\n\n[Document truncated for analysis...]";
+  }
+
+  return fullText;
+}
+
+/**
+ * Extracts full text from VPAT document for analysis.
+ * Standalone wrapper that owns document loading and cleanup.
+ * @param {string} fileId - Google Drive file ID
+ * @returns {string} Text prepared for quality checklist analysis
  */
 function extractFullDocumentText(fileId) {
-  const documentData = loadDocument(fileId);
+  let context = null;
 
   try {
-    const doc = DocumentApp.openById(documentData.tempDocId || fileId);
-    const body = doc.getBody();
-    let fullText = body.getText();
-
-    // Truncate if too long
-    const maxLength = CONFIG.QUALITY_CHECKLIST.MAX_DOC_LENGTH;
-    if (fullText.length > maxLength) {
-      Logger.log(
-        `Document truncated from ${fullText.length} to ${maxLength} characters`,
-      );
-      fullText =
-        fullText.substring(0, maxLength) +
-        "\n\n[Document truncated for analysis...]";
-    }
-
-    // Cleanup temp doc if created
-    if (documentData.tempDocId) {
-      cleanup(documentData.tempDocId);
-    }
-
-    return fullText;
-  } catch (error) {
-    if (documentData.tempDocId) {
-      cleanup(documentData.tempDocId);
-    }
-    throw error;
+    context = createAnalysisDocumentContext_(fileId);
+    return getQualityDocumentTextFromContext_(context);
+  } finally {
+    cleanupAnalysisDocumentContext_(context);
   }
 }
 
@@ -4146,7 +4549,9 @@ function normalizeQualityPassFail(value) {
     return value ? "Pass" : "Fail";
   }
 
-  const normalized = String(value || "").trim().toLowerCase();
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
   if (!normalized) {
     return "Fail";
   }
@@ -4174,21 +4579,17 @@ function normalizeQualityPassFail(value) {
     "does not support",
   ];
 
-  if (
-    passValues.includes(normalized) ||
-    normalized.startsWith("pass ")
-  ) {
+  if (passValues.includes(normalized) || normalized.startsWith("pass ")) {
     return "Pass";
   }
 
-  if (
-    failValues.includes(normalized) ||
-    normalized.startsWith("fail ")
-  ) {
+  if (failValues.includes(normalized) || normalized.startsWith("fail ")) {
     return "Fail";
   }
 
-  Logger.log(`Warning: Unclear quality response "${value}", defaulting to Fail`);
+  Logger.log(
+    `Warning: Unclear quality response "${value}", defaulting to Fail`,
+  );
   return "Fail";
 }
 

@@ -1,0 +1,18 @@
+export const QUALITY_REQUIREMENT_IDS = Object.freeze([
+  "qr-e12",
+  "qr-e13",
+  "qr-e14",
+  "qr-e16",
+  "qr-bp24",
+  "qr-e11",
+  "qr-bp09",
+  "qr-bp10",
+  "qr-bp11",
+  "qr-e09",
+  "qr-bp07",
+  "qr-e08",
+  "qr-bp04",
+  "qr-e19",
+  "qr-e04",
+  "qr-e06",
+]);

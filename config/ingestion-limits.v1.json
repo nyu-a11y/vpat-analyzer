@@ -1,0 +1,25 @@
+{
+  "id": "vpat-analyzer-ingestion-limits",
+  "version": "1.0.0",
+  "parserVersion": "1.0.0",
+  "candidateDocument": {
+    "maxBodyProseItems": 2048,
+    "maxTables": 128,
+    "maxHeadersPerTable": 32,
+    "maxRowsPerTable": 512,
+    "maxCellsPerRow": 32,
+    "maxTotalRows": 5000,
+    "maxExcludedRows": 5000,
+    "maxDuplicatesPerCriterion": 511,
+    "maxTotalCells": 20000,
+    "maxBodyProseCharacters": 10000,
+    "maxContextCharacters": 2000,
+    "maxHeaderCharacters": 500,
+    "maxCriterionLabelCharacters": 1000,
+    "maxConformanceCharacters": 2000,
+    "maxRemarksCharacters": 10000,
+    "maxCellCharacters": 10000,
+    "maxTotalCharacters": 2000000,
+    "maxTableIdCharacters": 128
+  }
+}

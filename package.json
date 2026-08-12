@@ -8,18 +8,30 @@
   },
   "scripts": {
     "test:contracts": "node --test tests/contracts/*.test.mjs",
-    "proof:stage0": "npm run test:contracts && node scripts/stage0-ingestion-blocked.mjs",
-    "test:a11y": "node scripts/stage1-command-placeholder.mjs test:a11y",
-    "test:appscript": "node scripts/stage1-command-placeholder.mjs test:appscript",
-    "test:browser": "node scripts/stage1-command-placeholder.mjs test:browser",
-    "proof:stage1": "node scripts/stage1-command-placeholder.mjs proof:stage1",
-    "test": "npm run test:contracts"
+    "fixtures:stage0": "node scripts/fixtures/verify-stage0-fixtures.mjs",
+    "build:harness:stage0": "node scripts/build-stage0-harness.mjs",
+    "test:ingestion": "node --test tests/unit/ingestion/*.test.mjs tests/integration/ingestion/*.test.mjs",
+    "proof:stage0:local": "npm run fixtures:stage0 && npm run test:ingestion && npm run build:harness:stage0 && node scripts/run-stage0-live-proof.mjs --local",
+    "proof:stage0:live": "node scripts/run-stage0-live-proof.mjs",
+    "proof:stage0": "npm run test:contracts && npm run proof:stage0:local && node scripts/stage0-ingestion-blocked.mjs",
+    "test:domain": "node --test tests/unit/domain/*.test.mjs",
+    "test:client": "node --test tests/unit/client/*.test.mjs",
+    "test:server": "node --test tests/unit/server/*.test.mjs",
+    "build:v1": "node scripts/build-v1-app.mjs",
+    "preview:v1": "npm run build:v1 && node scripts/serve-v1-preview.mjs",
+    "proof:v1:local": "npm run build:v1 && node scripts/run-v1-browser-proof.mjs",
+    "test:a11y": "npm run proof:v1:local",
+    "test:appscript": "npm run test:server && npm run build:v1",
+    "test:browser": "npm run proof:v1:local",
+    "proof:stage1": "npm run test && npm run proof:v1:local",
+    "test": "npm run test:contracts && npm run test:ingestion && npm run test:domain && npm run test:client && npm run test:server"
   },
   "dependencies": {
     "fflate": "0.8.2",
     "pdfjs-dist": "4.10.38"
   },
   "devDependencies": {
+    "axe-core": "4.13.0",
     "esbuild": "0.25.0",
     "playwright-core": "1.51.1"
   }
